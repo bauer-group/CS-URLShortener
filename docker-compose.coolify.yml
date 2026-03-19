@@ -1,0 +1,235 @@
+# =============================================================================
+# URLShortener — Production (Coolify)
+# =============================================================================
+# Usage: Deploy via Coolify with environment variables
+#
+# Coolify manages Traefik routing automatically — it creates its own routers
+# based on the domain configured in the Coolify dashboard and chains our
+# middleware definitions into its auto-generated HTTPS routers.
+#
+# Configure in Coolify UI:
+#   - shlink-server: Domain = go.bauer-group.com   Port = 8080
+#   - shlink-web:    (subpath /.ui via labels)      Port = 8080
+#
+# Required ENV: POSTGRES_PASSWORD, SHLINK_API_KEY, SHLINK_WEB_BASIC_AUTH
+# =============================================================================
+
+
+### Service Templates ###
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "3"
+
+x-shlink-common: &shlink-common
+  restart: unless-stopped
+  <<: *logging
+
+
+services:
+
+  # ── Shlink Server (URL Shortener Engine) ───────────────────────────────────
+  shlink-server:
+    <<: *shlink-common
+    image: shlinkio/shlink:${SHLINK_VERSION:-stable}
+    container_name: ${STACK_NAME:-url-shortener}_SERVER
+    hostname: shlink-server
+    environment:
+      TZ: ${TIME_ZONE:-Etc/UTC}
+
+      # ── Domain & Protocol ─────────────────────────────────────────
+      DEFAULT_DOMAIN: ${SHLINK_DOMAIN}
+      IS_HTTPS_ENABLED: ${SHLINK_IS_HTTPS:-true}
+
+      # ── Database ──────────────────────────────────────────────────
+      DB_DRIVER: postgres
+      DB_HOST: shlink-db
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-shlink}
+      DB_USER: ${POSTGRES_USER:-shlink}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+
+      # ── Redirects ─────────────────────────────────────────────────
+      DEFAULT_BASE_URL_REDIRECT: ${SHLINK_BASE_URL_REDIRECT:-https://bauer-group.com/}
+      DEFAULT_INVALID_SHORT_URL_REDIRECT: ${SHLINK_INVALID_URL_REDIRECT:-https://bauer-group.com/}
+      DEFAULT_REGULAR_404_REDIRECT: ${SHLINK_404_REDIRECT:-https://bauer-group.com/}
+      REDIRECT_STATUS_CODE: ${SHLINK_REDIRECT_STATUS:-302}
+
+      # ── Short URL Settings ────────────────────────────────────────
+      DEFAULT_SHORT_CODES_LENGTH: ${SHLINK_SHORT_CODE_LENGTH:-5}
+      SHORT_URL_MODE: ${SHLINK_URL_MODE:-loosely}
+
+      # ── API Key ───────────────────────────────────────────────────
+      INITIAL_API_KEY: ${SHLINK_API_KEY}
+
+      # ── Features ──────────────────────────────────────────────────
+      AUTO_RESOLVE_TITLES: ${SHLINK_AUTO_RESOLVE_TITLES:-true}
+      ANONYMIZE_REMOTE_ADDR: ${SHLINK_ANONYMIZE_REMOTE_ADDR:-true}
+      MEMORY_LIMIT: ${SHLINK_MEMORY_LIMIT:-256M}
+
+      # ── QR Code Defaults ──────────────────────────────────────────
+      DEFAULT_QR_CODE_SIZE: ${SHLINK_QR_SIZE:-300}
+      DEFAULT_QR_CODE_FORMAT: ${SHLINK_QR_FORMAT:-png}
+      DEFAULT_QR_CODE_MARGIN: ${SHLINK_QR_MARGIN:-0}
+      DEFAULT_QR_CODE_ERROR_CORRECTION: ${SHLINK_QR_ERROR_CORRECTION:-L}
+
+      # ── GeoIP (optional) ─────────────────────────────────────────
+      GEOLITE_LICENSE_KEY: ${SHLINK_GEOLITE_KEY:-}
+    expose:
+      - 8080/tcp
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/rest/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    depends_on:
+      shlink-db:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+
+      # ── Middleware: HTTP to HTTPS Redirect ──────────────────────────────
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-redirect-to-secure.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-redirect-to-secure.redirectscheme.permanent=true"
+
+      # ── Middleware: Security Headers ───────────────────────────────────
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-security-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-security-headers.headers.stsIncludeSubdomains=false"
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-security-headers.headers.stsPreload=false"
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-security-headers.headers.customFrameOptionsValue=SAMEORIGIN"
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-security-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-security-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+
+      # ── Router: Server — HTTP (redirect) ───────────────────────────────
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server-http.rule=Host(`${SHLINK_DOMAIN}`)"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server-http.entrypoints=web"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server-http.middlewares=${STACK_NAME:-url-shortener}-redirect-to-secure"
+
+      # ── Router: Server — HTTPS (catch-all: short URLs + API) ──────────
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server.rule=Host(`${SHLINK_DOMAIN}`)"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server.entrypoints=web-secure"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server.tls=true"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server.service=${STACK_NAME:-url-shortener}-server"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server.middlewares=${STACK_NAME:-url-shortener}-security-headers"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-server.priority=100"
+
+      # ── Service: Server ────────────────────────────────────────────────
+      - "traefik.http.services.${STACK_NAME:-url-shortener}-server.loadBalancer.server.port=8080"
+    networks:
+      local:
+
+
+  # ── Shlink Web Client (Admin UI at /.ui) ───────────────────────────────────
+  shlink-web:
+    <<: *shlink-common
+    image: shlinkio/shlink-web-client:${SHLINK_WEB_VERSION:-stable}
+    container_name: ${STACK_NAME:-url-shortener}_WEB
+    hostname: shlink-web
+    environment:
+      TZ: ${TIME_ZONE:-Etc/UTC}
+      SHLINK_SERVER_URL: https://${SHLINK_DOMAIN}
+      SHLINK_SERVER_NAME: ${SHLINK_SERVER_NAME:-BAUER GROUP}
+    expose:
+      - 8080/tcp
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    depends_on:
+      shlink-server:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+
+      # ── Middleware: HTTP to HTTPS Redirect (own definition) ────────────
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-web-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-web-redirect.redirectscheme.permanent=true"
+
+      # ── Middleware: StripPrefix (remove /.ui from path) ────────────────
+      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-strip-ui.stripprefix.prefixes=/.ui"
+
+      # ── Router: Web UI — HTTP (redirect) ───────────────────────────────
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-http.rule=Host(`${SHLINK_DOMAIN}`) && PathPrefix(`/.ui`)"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-http.entrypoints=web"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-http.middlewares=${STACK_NAME:-url-shortener}-web-redirect"
+
+      # ── Router: Web UI — HTTPS (/.ui subpath) ─────────────────────────
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.rule=Host(`${SHLINK_DOMAIN}`) && PathPrefix(`/.ui`)"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.entrypoints=web-secure"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.tls=true"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.service=${STACK_NAME:-url-shortener}-web"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.middlewares=${STACK_NAME:-url-shortener}-strip-ui,${STACK_NAME:-url-shortener}-security-headers"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.priority=200"
+
+      # ── Service: Web UI ────────────────────────────────────────────────
+      - "traefik.http.services.${STACK_NAME:-url-shortener}-web.loadBalancer.server.port=8080"
+
+
+  # ── PostgreSQL Database ────────────────────────────────────────────────────
+  #   → Tuned for SSD/NVMe by default (lean config for ~1000 links)
+  #   → For HDD: Set PG_RANDOM_PAGE_COST=2.0, PG_EFFECTIVE_IO_CONCURRENCY=4
+  # ─────────────────────────────────────────────────────────────────────────────
+  shlink-db:
+    image: postgres:${POSTGRES_VERSION:-18}
+    container_name: ${STACK_NAME:-url-shortener}_DATABASE
+    hostname: shlink-db
+    restart: unless-stopped
+    <<: *logging
+    command: >
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-20}
+      -c shared_buffers=${PG_SHARED_BUFFERS:-128MB}
+      -c work_mem=${PG_WORK_MEM:-2MB}
+      -c effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-256MB}
+      -c maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-32MB}
+      -c max_wal_size=${PG_MAX_WAL_SIZE:-128MB}
+      -c min_wal_size=${PG_MIN_WAL_SIZE:-32MB}
+      -c random_page_cost=${PG_RANDOM_PAGE_COST:-1.1}
+      -c seq_page_cost=1.0
+      -c effective_io_concurrency=${PG_EFFECTIVE_IO_CONCURRENCY:-200}
+      -c max_parallel_workers_per_gather=0
+      -c max_parallel_workers=2
+      -c max_parallel_maintenance_workers=1
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=4MB
+      -c default_statistics_target=100
+    environment:
+      TZ: ${TIME_ZONE:-Etc/UTC}
+      PG_TZ: ${TIME_ZONE:-Etc/UTC}
+      POSTGRES_DB: ${POSTGRES_DB:-shlink}
+      POSTGRES_USER: ${POSTGRES_USER:-shlink}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - 5432/tcp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shlink} -d ${POSTGRES_DB:-shlink}"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    volumes:
+      - shlink-db-data:/var/lib/postgresql
+    networks:
+      local:
+
+
+### Volumes ###
+volumes:
+  shlink-db-data:
+    driver: local
+    name: ${STACK_NAME:-url-shortener}-db-data
+
+
+### Networks ###
+networks:
+  local:
+    driver: bridge
+    name: ${STACK_NAME:-url-shortener}
+    enable_ipv6: true
