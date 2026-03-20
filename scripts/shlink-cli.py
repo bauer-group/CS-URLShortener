@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+# =============================================================================
+# shlink-cli.py — Manage Shlink short URLs from the command line
+# =============================================================================
+# Simple CLI for creating, listing, updating, and deleting short URLs
+# via the Shlink REST API.
+#
+# Usage:
+#   python scripts/shlink-cli.py list [--tag TAG]
+#   python scripts/shlink-cli.py create <long-url> [--slug SLUG] [--tag TAG] [--title TITLE]
+#   python scripts/shlink-cli.py info <short-code>
+#   python scripts/shlink-cli.py update <short-code> [--url URL] [--title TITLE] [--tag TAG]
+#   python scripts/shlink-cli.py delete <short-code> [--yes]
+#
+# Configuration is auto-detected from .env file.
+# Override with --server and --key options.
+#
+# Requirements: Python 3.6+ (no external dependencies)
+# =============================================================================
+
+import argparse
+import http.client
+import json
+import ssl
+import sys
+import urllib.parse
+from pathlib import Path
+
+
+# ── Configuration ─────────────────────────────────────────────────────────
+
+
+def _parse_env_file(path: Path) -> dict:
+    """Parse a .env file into a dict."""
+    result = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+            result[key.strip()] = value.strip()
+    return result
+
+
+def load_config(args: argparse.Namespace) -> dict:
+    """Build configuration from CLI args and .env file."""
+    config = {"url": getattr(args, "server", None), "key": getattr(args, "key", None)}
+
+    if config["url"] and config["key"]:
+        return config
+
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return config
+
+    env = _parse_env_file(env_path)
+
+    if not config["url"]:
+        domain = env.get("SHLINK_DOMAIN", "")
+        is_https = env.get("SHLINK_IS_HTTPS", "true").lower() == "true"
+        if domain:
+            config["url"] = f"{'https' if is_https else 'http'}://{domain}"
+
+    if not config["key"]:
+        config["key"] = env.get("SHLINK_API_KEY", "")
+
+    return config
+
+
+# ── API Client ────────────────────────────────────────────────────────────
+
+
+def api(config: dict, method: str, path: str, body: dict = None, params: dict = None) -> tuple[int, dict]:
+    """
+    Shlink REST API call via http.client.
+
+    Fresh TCP connection per request to avoid urllib hang issues on Windows.
+    """
+    parsed = urllib.parse.urlparse(config["url"])
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    api_path = f"/rest/v3{path}"
+    if params:
+        api_path += f"?{urllib.parse.urlencode(params)}"
+
+    headers = {"X-Api-Key": config["key"], "Connection": "close"}
+    payload = None
+    if body:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    try:
+        if parsed.scheme == "https":
+            conn = http.client.HTTPSConnection(host, port, timeout=10,
+                                               context=ssl.create_default_context())
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+
+        conn.request(method, api_path, body=payload, headers=headers)
+        resp = conn.getresponse()
+        raw = resp.read().decode("utf-8", errors="replace")
+        status = resp.status
+        conn.close()
+
+        if not raw.strip():
+            return status, {}
+        try:
+            return status, json.loads(raw)
+        except json.JSONDecodeError:
+            return status, {"detail": raw[:200]}
+
+    except Exception as e:
+        print(f"  Connection error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ── Commands ──────────────────────────────────────────────────────────────
+
+
+def cmd_list(config: dict, args: argparse.Namespace) -> None:
+    """List all short URLs."""
+    page = 1
+    total_pages = 1
+    count = 0
+
+    while page <= total_pages:
+        params = {"page": page, "itemsPerPage": 50}
+        if args.tag:
+            params["tags[]"] = args.tag
+
+        status, data = api(config, "GET", "/short-urls", params=params)
+        if status != 200:
+            print(f"  Error: {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
+            sys.exit(1)
+
+        short_urls = data.get("shortUrls", {})
+        items = short_urls.get("data", [])
+        pagination = short_urls.get("pagination", {})
+        total_pages = pagination.get("pagesCount", 1)
+        total_items = pagination.get("totalItems", 0)
+
+        if page == 1:
+            print(f"  {total_items} short URLs\n")
+
+        for item in items:
+            code = item.get("shortCode", "?")
+            url = item.get("longUrl", "?")
+            title = item.get("title") or ""
+            tags = ", ".join(item.get("tags", []))
+            visits = item.get("visitsSummary", {}).get("total", 0)
+
+            line = f"  /{code:<20s} → {url[:60]}"
+            if title:
+                line += f"\n  {'':<23s}  {title[:60]}"
+            meta = []
+            if tags:
+                meta.append(f"tags: {tags}")
+            if visits:
+                meta.append(f"{visits} visits")
+            if meta:
+                line += f"\n  {'':<23s}  [{', '.join(meta)}]"
+            print(line)
+            count += 1
+
+        page += 1
+
+    if count == 0:
+        print("  No short URLs found.")
+
+
+def cmd_create(config: dict, args: argparse.Namespace) -> None:
+    """Create a new short URL."""
+    body = {
+        "longUrl": args.long_url,
+        "validateUrl": False,
+    }
+    if args.slug:
+        body["customSlug"] = args.slug
+    if args.title:
+        body["title"] = args.title
+    if args.tag:
+        body["tags"] = args.tag
+
+    status, data = api(config, "POST", "/short-urls", body=body)
+
+    if status in (200, 201):
+        code = data.get("shortCode", "?")
+        short_url = data.get("shortUrl", f"{config['url']}/{code}")
+        print(f"  ✓ {short_url}")
+    else:
+        detail = data.get("detail", f"HTTP {status}")
+        print(f"  ✗ {detail}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_info(config: dict, args: argparse.Namespace) -> None:
+    """Show details for a short URL."""
+    status, data = api(config, "GET", f"/short-urls/{args.short_code}")
+
+    if status == 404:
+        print(f"  ✗ /{args.short_code} not found", file=sys.stderr)
+        sys.exit(1)
+    if status != 200:
+        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"  Short Code:  /{data.get('shortCode')}")
+    print(f"  Short URL:   {data.get('shortUrl')}")
+    print(f"  Long URL:    {data.get('longUrl')}")
+    if data.get("title"):
+        print(f"  Title:       {data['title']}")
+    if data.get("tags"):
+        print(f"  Tags:        {', '.join(data['tags'])}")
+    print(f"  Created:     {data.get('dateCreated', '?')}")
+
+    meta = data.get("meta", {})
+    if meta.get("validSince"):
+        print(f"  Valid Since: {meta['validSince']}")
+    if meta.get("validUntil"):
+        print(f"  Valid Until: {meta['validUntil']}")
+    if meta.get("maxVisits"):
+        print(f"  Max Visits:  {meta['maxVisits']}")
+
+    visits = data.get("visitsSummary", {})
+    print(f"  Visits:      {visits.get('total', 0)} (bots: {visits.get('bots', 0)})")
+    print(f"  Crawlable:   {data.get('crawlable', False)}")
+    print(f"  Fwd Query:   {data.get('forwardQuery', True)}")
+
+
+def cmd_update(config: dict, args: argparse.Namespace) -> None:
+    """Update an existing short URL."""
+    body = {}
+    if args.url:
+        body["longUrl"] = args.url
+    if args.title:
+        body["title"] = args.title
+    if args.tag:
+        body["tags"] = args.tag
+
+    if not body:
+        print("  Nothing to update. Use --url, --title, or --tag.", file=sys.stderr)
+        sys.exit(1)
+
+    status, data = api(config, "PATCH", f"/short-urls/{args.short_code}", body=body)
+
+    if status == 200:
+        print(f"  ✓ /{args.short_code} updated")
+    elif status == 404:
+        print(f"  ✗ /{args.short_code} not found", file=sys.stderr)
+        sys.exit(1)
+    else:
+        detail = data.get("detail", f"HTTP {status}")
+        print(f"  ✗ {detail}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_delete(config: dict, args: argparse.Namespace) -> None:
+    """Delete a short URL."""
+    if not args.yes:
+        confirm = input(f"  Delete /{args.short_code}? [y/N] ").strip().lower()
+        if confirm != "y":
+            print("  Cancelled.")
+            return
+
+    status, data = api(config, "DELETE", f"/short-urls/{args.short_code}")
+
+    if status == 204:
+        print(f"  ✓ /{args.short_code} deleted")
+    elif status == 404:
+        print(f"  ✗ /{args.short_code} not found", file=sys.stderr)
+        sys.exit(1)
+    else:
+        detail = data.get("detail", f"HTTP {status}")
+        print(f"  ✗ {detail}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Manage Shlink short URLs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python scripts/shlink-cli.py list
+  python scripts/shlink-cli.py list --tag yourls
+  python scripts/shlink-cli.py create https://example.com --slug test --tag marketing
+  python scripts/shlink-cli.py info test
+  python scripts/shlink-cli.py update test --url https://new.example.com --title "New Title"
+  python scripts/shlink-cli.py delete test --yes
+        """,
+    )
+
+    parser.add_argument("--server", help="Shlink server URL (auto-detected from .env)")
+    parser.add_argument("--key", help="Shlink API key (auto-detected from .env)")
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # list
+    ls = sub.add_parser("list", help="List all short URLs")
+    ls.add_argument("--tag", help="Filter by tag")
+
+    # create
+    cr = sub.add_parser("create", help="Create a short URL")
+    cr.add_argument("long_url", help="Target URL")
+    cr.add_argument("--slug", "-s", help="Custom short code")
+    cr.add_argument("--title", "-t", help="Title")
+    cr.add_argument("--tag", action="append", help="Tag (repeatable)")
+
+    # info
+    inf = sub.add_parser("info", help="Show short URL details")
+    inf.add_argument("short_code", help="Short code to inspect")
+
+    # update
+    up = sub.add_parser("update", help="Update a short URL")
+    up.add_argument("short_code", help="Short code to update")
+    up.add_argument("--url", "-u", help="New target URL")
+    up.add_argument("--title", "-t", help="New title")
+    up.add_argument("--tag", action="append", help="Replace tags (repeatable)")
+
+    # delete
+    dl = sub.add_parser("delete", help="Delete a short URL")
+    dl.add_argument("short_code", help="Short code to delete")
+    dl.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    config = load_config(args)
+
+    if not config["url"] or not config["key"]:
+        print("✗ Shlink URL and API key are required.", file=sys.stderr)
+        print("  Set in .env or pass --server and --key", file=sys.stderr)
+        sys.exit(1)
+
+    commands = {
+        "list": cmd_list,
+        "create": cmd_create,
+        "info": cmd_info,
+        "update": cmd_update,
+        "delete": cmd_delete,
+    }
+    commands[args.command](config, args)
+
+
+if __name__ == "__main__":
+    main()
