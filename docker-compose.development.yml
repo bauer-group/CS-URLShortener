@@ -9,7 +9,7 @@
 # Features:
 #   - Shlink URL shortener with direct port binding
 #   - Admin web UI with direct port binding
-#   - PostgreSQL database (tuned for ~1000 links, SSD/NVMe defaults)
+#   - PostgreSQL database (tuned for ≤5k links, ~100k visits/mo, SSD/NVMe)
 #   - IPv6 support
 #
 # Access:
@@ -120,7 +120,7 @@ services:
 
 
   # ── PostgreSQL Database ────────────────────────────────────────────────────
-  #   → Tuned for SSD/NVMe by default (lean config for ~1000 links)
+  #   → Tuned for ≤5k links, ~100k visits/mo (SSD/NVMe defaults)
   #   → For HDD: Set PG_RANDOM_PAGE_COST=2.0, PG_EFFECTIVE_IO_CONCURRENCY=4
   # ─────────────────────────────────────────────────────────────────────────────
   shlink-db:

@@ -13,7 +13,7 @@
 #   - REST API at /rest/v3/...
 #   - Admin web UI at /.ui (BasicAuth + StripPrefix)
 #   - Security headers (HSTS, X-Frame-Options, nosniff)
-#   - PostgreSQL database (tuned for ~1000 links, SSD/NVMe defaults)
+#   - PostgreSQL database (tuned for ≤5k links, ~100k visits/mo, SSD/NVMe)
 #   - GeoIP visitor tracking (optional)
 #   - Traefik v3 compatible
 #   - IPv6 support
@@ -188,7 +188,7 @@ services:
 
 
   # ── PostgreSQL Database ────────────────────────────────────────────────────
-  #   → Tuned for SSD/NVMe by default (lean config for ~1000 links)
+  #   → Tuned for ≤5k links, ~100k visits/mo (SSD/NVMe defaults)
   #   → For HDD: Set PG_RANDOM_PAGE_COST=2.0, PG_EFFECTIVE_IO_CONCURRENCY=4
   # ─────────────────────────────────────────────────────────────────────────────
   shlink-db:

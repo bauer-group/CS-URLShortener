@@ -95,7 +95,7 @@ def yourls_fetch_all(api_url: str, auth: dict, batch_size: int = 100) -> list[di
         for key, link in links.items():
             if isinstance(link, dict) and "shorturl" in link:
                 all_links.append({
-                    "keyword": link.get("keyword", ""),
+                    "keyword": link.get("keyword", "") or link.get("shorturl", "").rstrip("/").rsplit("/", 1)[-1],
                     "url": link.get("url", ""),
                     "title": link.get("title", ""),
                     "clicks": int(link.get("clicks", 0)),
@@ -119,6 +119,7 @@ def shlink_create_short_url(
     long_url: str,
     custom_slug: str,
     title: str = None,
+    tags: list[str] = None,
 ) -> tuple[bool, str]:
     """
     Create a short URL in Shlink.
@@ -135,6 +136,8 @@ def shlink_create_short_url(
     }
     if title:
         body["title"] = title
+    if tags:
+        body["tags"] = tags
 
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(endpoint, data=data, method="POST")
@@ -143,16 +146,23 @@ def shlink_create_short_url(
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
+            if not raw.strip():
+                return True, f"/{custom_slug} (empty response, HTTP {resp.status})"
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                preview = raw[:200].replace("\n", " ")
+                return False, f"HTTP {resp.status} non-JSON response: {preview}"
             short_code = result.get("shortCode", custom_slug)
             return True, f"/{short_code}"
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
+        raw = e.read().decode("utf-8", errors="replace")
         try:
-            err = json.loads(body)
-            detail = err.get("detail", err.get("title", body))
+            err = json.loads(raw)
+            detail = err.get("detail", err.get("title", raw))
         except json.JSONDecodeError:
-            detail = body
+            detail = raw[:200] or f"HTTP {e.code} (empty response)"
         return False, detail
 
 
@@ -276,6 +286,10 @@ def run_import(config: dict, dry_run: bool = False, export_path: str = None) -> 
         url = link["url"]
         title = link["title"]
 
+        # Add missing URL scheme
+        if url and not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+
         if dry_run:
             print(f"  [{i}/{len(links)}] /{keyword} → {url[:60]}")
             success += 1
@@ -287,6 +301,7 @@ def run_import(config: dict, dry_run: bool = False, export_path: str = None) -> 
             long_url=url,
             custom_slug=keyword,
             title=title,
+            tags=config.get("tags"),
         )
 
         if ok:
@@ -362,6 +377,7 @@ Examples:
     shlink.add_argument("--shlink-url", help="Shlink server URL (auto-detected from .env)")
     shlink.add_argument("--shlink-key", help="Shlink API key (auto-detected from .env)")
 
+    parser.add_argument("--tag", action="append", default=[], help="Tag(s) to add to all imported URLs (repeatable, default: yourls-import)")
     parser.add_argument("--dry-run", action="store_true", help="Preview import without making changes")
     parser.add_argument("--export", metavar="FILE", help="Export fetched YOURLS data as JSON backup")
 
@@ -379,6 +395,7 @@ def main() -> None:
         print("✗ Shlink URL and API key are required.", file=sys.stderr)
         sys.exit(1)
 
+    config["tags"] = args.tag or ["yourls-import"]
     run_import(config, dry_run=args.dry_run, export_path=args.export)
 
 
