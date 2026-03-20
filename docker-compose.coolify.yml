@@ -7,9 +7,26 @@
 # based on the domain configured in the Coolify dashboard and chains our
 # middleware definitions into its auto-generated HTTPS routers.
 #
-# Configure in Coolify UI:
-#   - shlink-server: Domain = go.bauer-group.com   Port = 8080
-#   - shlink-web:    (subpath /.ui via labels)      Port = 8080
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │ COOLIFY DOMAIN CONFIGURATION                                               │
+# ├──────────────────┬─────────────────────────────────────────────────────────┤
+# │ Service          │ Coolify "Domains" Field                                 │
+# ├──────────────────┼─────────────────────────────────────────────────────────┤
+# │ shlink-server    │ https://go.bauer-group.com                               │
+# │ shlink-web       │ https://go.bauer-group.com/.ui,                         │
+# │                  │ https://go.bauer-group.com/assets,                      │
+# │                  │ https://go.bauer-group.com/manifest.json,               │
+# │                  │ https://go.bauer-group.com/favicon.ico                  │
+# │ shlink-db        │ (keine Domain — nur intern)                             │
+# └──────────────────┴─────────────────────────────────────────────────────────┘
+#
+# Copy-paste für Coolify:
+#
+#   shlink-server:
+#     https://go.bauer-group.com
+#
+#   shlink-web:
+#     https://go.bauer-group.com/.ui,https://go.bauer-group.com/assets,https://go.bauer-group.com/manifest.json,https://go.bauer-group.com/favicon.ico
 #
 # Required ENV: POSTGRES_PASSWORD, SHLINK_API_KEY, SHLINK_WEB_BASIC_AUTH
 # =============================================================================
