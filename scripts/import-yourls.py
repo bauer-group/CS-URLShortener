@@ -28,7 +28,9 @@
 # =============================================================================
 
 import argparse
+import http.client
 import json
+import ssl
 import sys
 import time
 import urllib.error
@@ -113,6 +115,53 @@ def yourls_fetch_all(api_url: str, auth: dict, batch_size: int = 100) -> list[di
 # ── Shlink API Client ──────────────────────────────────────────────────────
 
 
+def _shlink_api(shlink_url: str, api_key: str, method: str, path: str, body: dict = None) -> tuple[int, str]:
+    """
+    Shlink REST API call via http.client.
+
+    Each call opens a fresh TCP connection and closes it immediately.
+    Python's urllib hangs on Windows after error responses (409, 422)
+    due to broken connection reuse — http.client avoids this entirely.
+    """
+    parsed = urllib.parse.urlparse(shlink_url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    api_path = f"/rest/v3{path}"
+
+    headers = {"X-Api-Key": api_key, "Connection": "close"}
+    payload = None
+    if body:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    try:
+        if parsed.scheme == "https":
+            conn = http.client.HTTPSConnection(host, port, timeout=10,
+                                               context=ssl.create_default_context())
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+
+        conn.request(method, api_path, body=payload, headers=headers)
+        resp = conn.getresponse()
+        data = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+        return resp.status, data
+    except Exception as e:
+        return 0, str(e)
+
+
+def shlink_short_url_exists(shlink_url: str, api_key: str, short_code: str) -> bool:
+    """Check if a short code already exists in Shlink."""
+    status, _ = _shlink_api(shlink_url, api_key, "GET", f"/short-urls/{short_code}")
+    return status == 200
+
+
+def shlink_delete_short_url(shlink_url: str, api_key: str, short_code: str) -> bool:
+    """Delete a short URL from Shlink. Returns True on success."""
+    status, _ = _shlink_api(shlink_url, api_key, "DELETE", f"/short-urls/{short_code}")
+    return status == 204
+
+
 def shlink_create_short_url(
     shlink_url: str,
     api_key: str,
@@ -126,12 +175,9 @@ def shlink_create_short_url(
 
     Returns (success, message) tuple.
     """
-    endpoint = f"{shlink_url.rstrip('/')}/rest/v3/short-urls"
-
     body = {
         "longUrl": long_url,
         "customSlug": custom_slug,
-        "findIfExists": True,
         "validateUrl": False,
     }
     if title:
@@ -139,30 +185,22 @@ def shlink_create_short_url(
     if tags:
         body["tags"] = tags
 
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(endpoint, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("X-Api-Key", api_key)
+    status, raw = _shlink_api(shlink_url, api_key, "POST", "/short-urls", body)
 
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
-            if not raw.strip():
-                return True, f"/{custom_slug} (empty response, HTTP {resp.status})"
-            try:
-                result = json.loads(raw)
-            except json.JSONDecodeError:
-                preview = raw[:200].replace("\n", " ")
-                return False, f"HTTP {resp.status} non-JSON response: {preview}"
-            short_code = result.get("shortCode", custom_slug)
-            return True, f"/{short_code}"
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
+    if status in (200, 201):
+        try:
+            result = json.loads(raw)
+            return True, f"/{result.get('shortCode', custom_slug)}"
+        except (json.JSONDecodeError, ValueError):
+            return True, f"/{custom_slug}"
+    elif status == 0:
+        return False, f"Connection error: {raw}"
+    else:
         try:
             err = json.loads(raw)
-            detail = err.get("detail", err.get("title", raw))
-        except json.JSONDecodeError:
-            detail = raw[:200] or f"HTTP {e.code} (empty response)"
+            detail = err.get("detail", err.get("title", raw[:200]))
+        except (json.JSONDecodeError, ValueError):
+            detail = raw[:200] or f"HTTP {status}"
         return False, detail
 
 
@@ -276,8 +314,8 @@ def run_import(config: dict, dry_run: bool = False, export_path: str = None) -> 
     else:
         print("── Phase 2: Importing into Shlink ─────────────────────")
 
-    success = 0
-    skipped = 0
+    created = 0
+    updated = 0
     failed = 0
     errors = []
 
@@ -292,8 +330,13 @@ def run_import(config: dict, dry_run: bool = False, export_path: str = None) -> 
 
         if dry_run:
             print(f"  [{i}/{len(links)}] /{keyword} → {url[:60]}")
-            success += 1
+            created += 1
             continue
+
+        # Delete existing short code first (avoids 409 which hangs urllib)
+        existed = shlink_short_url_exists(config["shlink_url"], config["shlink_key"], keyword)
+        if existed:
+            shlink_delete_short_url(config["shlink_url"], config["shlink_key"], keyword)
 
         ok, msg = shlink_create_short_url(
             config["shlink_url"],
@@ -305,16 +348,16 @@ def run_import(config: dict, dry_run: bool = False, export_path: str = None) -> 
         )
 
         if ok:
-            success += 1
-            print(f"  ✓ [{i}/{len(links)}] /{keyword} → {url[:60]}")
-        else:
-            if "already exists" in msg.lower() or "already in use" in msg.lower():
-                skipped += 1
-                print(f"  ○ [{i}/{len(links)}] /{keyword} (already exists)")
+            if existed:
+                updated += 1
+                print(f"  ✓ [{i}/{len(links)}] /{keyword} → {url[:60]} (updated)")
             else:
-                failed += 1
-                errors.append({"keyword": keyword, "url": url, "error": msg})
-                print(f"  ✗ [{i}/{len(links)}] /{keyword} — {msg}")
+                created += 1
+                print(f"  ✓ [{i}/{len(links)}] /{keyword} → {url[:60]}")
+        else:
+            failed += 1
+            errors.append({"keyword": keyword, "url": url, "error": msg})
+            print(f"  ✗ [{i}/{len(links)}] /{keyword} — {msg}")
 
         # Rate limiting: small delay between requests
         if i % 10 == 0:
@@ -325,10 +368,10 @@ def run_import(config: dict, dry_run: bool = False, export_path: str = None) -> 
     print("── Summary ────────────────────────────────────────────")
     print(f"  Total:   {len(links)}")
     if dry_run:
-        print(f"  Preview: {success} URLs would be imported")
+        print(f"  Preview: {created} URLs would be imported")
     else:
-        print(f"  Created: {success}")
-        print(f"  Skipped: {skipped} (already exist)")
+        print(f"  Created: {created}")
+        print(f"  Updated: {updated}")
         if failed:
             print(f"  Failed:  {failed}")
             print()
@@ -377,7 +420,7 @@ Examples:
     shlink.add_argument("--shlink-url", help="Shlink server URL (auto-detected from .env)")
     shlink.add_argument("--shlink-key", help="Shlink API key (auto-detected from .env)")
 
-    parser.add_argument("--tag", action="append", default=[], help="Tag(s) to add to all imported URLs (repeatable, default: yourls-import)")
+    parser.add_argument("--tag", action="append", default=[], help="Tag(s) to add to all imported URLs (repeatable, default: yourls)")
     parser.add_argument("--dry-run", action="store_true", help="Preview import without making changes")
     parser.add_argument("--export", metavar="FILE", help="Export fetched YOURLS data as JSON backup")
 
@@ -395,7 +438,7 @@ def main() -> None:
         print("✗ Shlink URL and API key are required.", file=sys.stderr)
         sys.exit(1)
 
-    config["tags"] = args.tag or ["yourls-import"]
+    config["tags"] = args.tag or ["yourls"]
     run_import(config, dry_run=args.dry_run, export_path=args.export)
 
 
