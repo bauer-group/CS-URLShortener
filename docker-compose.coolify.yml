@@ -169,6 +169,18 @@ services:
       - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.middlewares=${STACK_NAME:-url-shortener}-strip-ui,${STACK_NAME:-url-shortener}-security-headers"
       - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.priority=200"
 
+      # ── Router: Web UI Assets — HTTPS ────────────────────────────────
+      #   The SPA references /assets/*, /manifest.json, /favicon.ico with
+      #   absolute paths (no /.ui prefix). Route these to the web client
+      #   directly (no StripPrefix needed).
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.rule=Host(`${SHLINK_DOMAIN}`) && (PathPrefix(`/assets`) || Path(`/manifest.json`) || Path(`/favicon.ico`))"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.entrypoints=web-secure"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.tls=true"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.service=${STACK_NAME:-url-shortener}-web"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.middlewares=${STACK_NAME:-url-shortener}-security-headers"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.priority=200"
+
       # ── Service: Web UI ────────────────────────────────────────────────
       - "traefik.http.services.${STACK_NAME:-url-shortener}-web.loadBalancer.server.port=8080"
 

@@ -125,23 +125,46 @@ Die SPA enthält **keine Zugangsdaten** — der API-Key wird vom Benutzer manuel
 
 ## Scripts
 
+Alle Scripts sind Python 3.6+ und haben **keine externen Abhängigkeiten** (stdlib only).
+Shlink-Verbindungsdaten werden automatisch aus `.env` gelesen.
+
 ### .env generieren
 
 ```bash
 python scripts/generate-env.py
 ```
 
-Generiert automatisch sichere Werte für alle Pflicht-Variablen:
+Generiert automatisch sichere Werte für alle Pflicht-Variablen (`POSTGRES_PASSWORD`, `SHLINK_API_KEY`).
+Die erzeugte `.env` wird mit Dateiberechtigungen `600` (nur Owner lesbar) geschrieben.
 
-- `POSTGRES_PASSWORD` — 32-Zeichen Hex-String
-- `SHLINK_API_KEY` — UUID v4
+### CLI — Short URLs verwalten
 
-Alle anderen Variablen werden mit ihren Defaults aus `.env.example` übernommen. Die erzeugte `.env` wird mit Dateiberechtigungen `600` (nur Owner lesbar) geschrieben.
+```bash
+python scripts/shlink-cli.py list                          # Alle URLs auflisten
+python scripts/shlink-cli.py list --tag yourls              # Nach Tag filtern
+python scripts/shlink-cli.py create https://example.com --slug test --tag marketing
+python scripts/shlink-cli.py info test                      # Details anzeigen
+python scripts/shlink-cli.py update test --url https://new.example.com --title "Neuer Titel"
+python scripts/shlink-cli.py delete test                    # Mit Bestätigung
+python scripts/shlink-cli.py delete test --yes              # Ohne Rückfrage
+```
+
+### Backup & Restore
+
+```bash
+python scripts/shlink-backup.py backup                     # URL-Definitionen sichern
+python scripts/shlink-backup.py backup --compress           # Mit gzip-Komprimierung
+python scripts/shlink-backup.py backup --include-visits     # Inkl. Visit-Daten (Archiv)
+python scripts/shlink-backup.py restore --input backup.json --dry-run   # Vorschau
+python scripts/shlink-backup.py restore --input backup.json --skip-existing
+```
+
+Visit-Daten werden mit `--include-visits` archiviert, können aber nicht wiederhergestellt werden (Shlink API bietet keinen Visit-Import).
 
 ### YOURLS-Migration
 
-Migriert alle Short-URLs von einer laufenden YOURLS-Instanz nach Shlink via API.
-Custom-Slugs und Titel werden 1:1 übernommen. Bereits existierende Slugs werden übersprungen (idempotent).
+Migriert alle Short-URLs von einer laufenden YOURLS-Instanz nach Shlink.
+Custom-Slugs und Titel werden 1:1 übernommen. Existierende Slugs werden gelöscht und neu angelegt.
 
 ```bash
 # Dry-Run (Vorschau ohne Änderungen)
@@ -150,27 +173,18 @@ python scripts/import-yourls.py \
   --yourls-signature YOUR_TOKEN \
   --dry-run
 
-# Tatsächlicher Import (Shlink-Verbindung wird aus .env gelesen)
+# Import mit Default-Tag "yourls"
 python scripts/import-yourls.py \
   --yourls-url https://old.example.com/yourls-api.php \
   --yourls-signature YOUR_TOKEN
 
-# Mit JSON-Backup der YOURLS-Daten
+# Mit JSON-Backup der YOURLS-Daten und Custom-Tags
 python scripts/import-yourls.py \
   --yourls-url https://old.example.com/yourls-api.php \
-  --yourls-signature YOUR_TOKEN \
+  --yourls-username admin --yourls-password SECRET \
+  --tag yourls --tag legacy \
   --export yourls-backup.json
 ```
-
-**Features:**
-
-- Paginiertes Abrufen aller URLs aus YOURLS
-- Authentifizierung via Signature-Token oder Username/Passwort
-- Shlink-Verbindungsdaten werden automatisch aus `.env` gelesen
-- `--dry-run` zeigt was importiert würde, ohne Änderungen
-- `--export` sichert die YOURLS-Daten als JSON-Datei
-
-**Voraussetzungen:** Python 3.6+, keine externen Abhängigkeiten.
 
 ## Sicherheit
 
@@ -191,6 +205,8 @@ Die REST API (`/rest/v3/...`) ist durch den `X-Api-Key` Header geschützt. Für 
 URLShortener/
 ├── scripts/
 │   ├── generate-env.py                 # .env Generator (auto-generierte Secrets)
+│   ├── shlink-cli.py                   # CLI: create, list, update, delete
+│   ├── shlink-backup.py                # Backup & Restore (JSON/gzip)
 │   └── import-yourls.py                # YOURLS → Shlink Migration
 ├── docker-compose.traefik.yml          # Produktion: Traefik + HTTPS
 ├── docker-compose.coolify.yml          # Produktion: Coolify PaaS
