@@ -6,13 +6,13 @@ Produktionsbereiter [Shlink](https://shlink.io/) URL-Shortener für die BAUER GR
 |------------|----------------------------------------------|
 | Short URLs | `https://go.bauer-group.com/{shortcode}`     |
 | REST API   | `https://go.bauer-group.com/rest/v3/...`     |
-| Admin UI   | `https://go.bauer-group.com/.ui`             |
+| Admin UI   | `https://ui.go.bauer-group.com`              |
 
 ## Funktionen
 
 - **URL-Verkürzung** — Kurze Links mit konfigurierbarer Codelänge und QR-Codes
 - **REST API** — Vollständige API unter `/rest/v3/...` zur programmatischen Verwaltung
-- **Admin-Weboberfläche** — Verwaltung über `/.ui` (Shlink Web Client)
+- **Admin-Weboberfläche** — Verwaltung über `ui.go.bauer-group.com` (Shlink Web Client)
 - **Besucherstatistiken** — Klickzählung, Referrer, Geolokalisierung (optional via GeoLite2)
 - **Weiterleitungen** — Konfigurierbare Fallback-Weiterleitungen für unbekannte Pfade
 - **DSGVO-konform** — IP-Anonymisierung standardmäßig aktiviert
@@ -25,9 +25,9 @@ Produktionsbereiter [Shlink](https://shlink.io/) URL-Shortener für die BAUER GR
                     │              Traefik / Coolify            │
                     └────┬──────────────────────────┬──────────┘
                          │                          │
-              go.bauer-group.com          go.bauer-group.com/.ui
-              (short URLs + API)          (Admin UI + StripPrefix)
-              Priority 100                Priority 200
+              go.bauer-group.com          ui.go.bauer-group.com
+              (short URLs + API)          (Admin UI)
+              Priority 100                (own subdomain)
                          │                          │
                   ┌──────┴──────┐            ┌──────┴──────┐
                   │shlink-server│            │ shlink-web  │
@@ -115,9 +115,9 @@ Der `SHLINK_API_KEY` (via `INITIAL_API_KEY`) wird nur beim **ersten Start** mit 
 docker exec -it url-shortener_SERVER shlink api-key:generate
 ```
 
-## Admin UI unter /.ui
+## Admin UI
 
-Die Shlink Web-Oberfläche ist unter `/.ui` erreichbar. Traefik leitet Anfragen mit `PathPrefix(/.ui)` an den Web-Client weiter und entfernt den Prefix via `StripPrefix`-Middleware.
+Die Shlink Web-Oberfläche läuft auf einer eigenen Subdomain (`ui.go.bauer-group.com`). DNS-Record (CNAME oder A) muss auf den gleichen Server wie `go.bauer-group.com` zeigen.
 
 Die SPA enthält **keine Zugangsdaten** — der API-Key wird vom Benutzer manuell im Browser eingegeben und im `localStorage` gespeichert. Dadurch ist kein zusätzlicher Schutz (BasicAuth o.ä.) auf dem Web-Client nötig.
 

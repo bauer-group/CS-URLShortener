@@ -13,10 +13,7 @@
 # │ Service          │ Coolify "Domains" Field                                 │
 # ├──────────────────┼─────────────────────────────────────────────────────────┤
 # │ shlink-server    │ https://go.bauer-group.com                               │
-# │ shlink-web       │ https://go.bauer-group.com/.ui,                         │
-# │                  │ https://go.bauer-group.com/assets,                      │
-# │                  │ https://go.bauer-group.com/manifest.json,               │
-# │                  │ https://go.bauer-group.com/favicon.ico                  │
+# │ shlink-web       │ https://ui.go.bauer-group.com                            │
 # │ shlink-db        │ (keine Domain — nur intern)                             │
 # └──────────────────┴─────────────────────────────────────────────────────────┘
 #
@@ -26,7 +23,7 @@
 #     https://go.bauer-group.com
 #
 #   shlink-web:
-#     https://go.bauer-group.com/.ui,https://go.bauer-group.com/assets,https://go.bauer-group.com/manifest.json,https://go.bauer-group.com/favicon.ico
+#     https://ui.go.bauer-group.com
 #
 # Required ENV: POSTGRES_PASSWORD, SHLINK_API_KEY, SHLINK_WEB_BASIC_AUTH
 # =============================================================================
@@ -141,7 +138,7 @@ services:
       local:
 
 
-  # ── Shlink Web Client (Admin UI at /.ui) ───────────────────────────────────
+  # ── Shlink Web Client (Admin UI at ui.${SHLINK_DOMAIN}) ────────────────────
   shlink-web:
     <<: *shlink-common
     image: shlinkio/shlink-web-client:${SHLINK_WEB_VERSION:-stable}
@@ -165,38 +162,22 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # ── Middleware: HTTP to HTTPS Redirect (own definition) ────────────
+      # ── Middleware: HTTP to HTTPS Redirect ────────────────────────────
       - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-web-redirect.redirectscheme.scheme=https"
       - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-web-redirect.redirectscheme.permanent=true"
 
-      # ── Middleware: StripPrefix (remove /.ui from path) ────────────────
-      - "traefik.http.middlewares.${STACK_NAME:-url-shortener}-strip-ui.stripprefix.prefixes=/.ui"
-
-      # ── Router: Web UI — HTTP (redirect) ───────────────────────────────
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-http.rule=Host(`${SHLINK_DOMAIN}`) && PathPrefix(`/.ui`)"
+      # ── Router: Web UI — HTTP (redirect to HTTPS) ─────────────────────
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-http.rule=Host(`${SHLINK_WEB_DOMAIN:-ui.go.bauer-group.com}`)"
       - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-http.entrypoints=web"
       - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-http.middlewares=${STACK_NAME:-url-shortener}-web-redirect"
 
-      # ── Router: Web UI — HTTPS (/.ui subpath) ─────────────────────────
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.rule=Host(`${SHLINK_DOMAIN}`) && PathPrefix(`/.ui`)"
+      # ── Router: Web UI — HTTPS (own subdomain) ───────────────────────
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.rule=Host(`${SHLINK_WEB_DOMAIN:-ui.go.bauer-group.com}`)"
       - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.entrypoints=web-secure"
       - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.tls=true"
       - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.tls.certresolver=letsencrypt"
       - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.service=${STACK_NAME:-url-shortener}-web"
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.middlewares=${STACK_NAME:-url-shortener}-strip-ui,${STACK_NAME:-url-shortener}-security-headers"
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.priority=200"
-
-      # ── Router: Web UI Assets — HTTPS ────────────────────────────────
-      #   The SPA references /assets/*, /manifest.json, /favicon.ico with
-      #   absolute paths (no /.ui prefix). Route these to the web client
-      #   directly (no StripPrefix needed).
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.rule=Host(`${SHLINK_DOMAIN}`) && (PathPrefix(`/assets`) || Path(`/manifest.json`) || Path(`/favicon.ico`))"
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.entrypoints=web-secure"
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.tls=true"
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.service=${STACK_NAME:-url-shortener}-web"
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.middlewares=${STACK_NAME:-url-shortener}-security-headers"
-      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web-assets.priority=200"
+      - "traefik.http.routers.${STACK_NAME:-url-shortener}-web.middlewares=${STACK_NAME:-url-shortener}-security-headers"
 
       # ── Service: Web UI ────────────────────────────────────────────────
       - "traefik.http.services.${STACK_NAME:-url-shortener}-web.loadBalancer.server.port=8080"
