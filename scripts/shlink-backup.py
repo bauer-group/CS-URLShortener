@@ -151,6 +151,32 @@ def fetch_all_short_urls(base_url: str, api_key: str) -> list[dict]:
     return all_urls
 
 
+def fetch_visits_for_url(base_url: str, api_key: str, short_code: str) -> list[dict]:
+    """Fetch all visits for a short URL (handles pagination)."""
+    all_visits = []
+    page = 1
+    total_pages = 1
+
+    while page <= total_pages:
+        status, data = _api_request(
+            base_url, api_key, "GET", f"/short-urls/{short_code}/visits",
+            params={"page": page, "itemsPerPage": 100},
+        )
+
+        if status != 200:
+            break
+
+        visits = data.get("visits", {})
+        items = visits.get("data", [])
+        pagination = visits.get("pagination", {})
+        total_pages = pagination.get("pagesCount", 1)
+
+        all_visits.extend(items)
+        page += 1
+
+    return all_visits
+
+
 def create_short_url(base_url: str, api_key: str, entry: dict) -> tuple[bool, str]:
     """
     Create a short URL in Shlink from a backup entry.
@@ -221,7 +247,7 @@ def _normalize_entry(raw: dict) -> dict:
     }
 
 
-def run_backup(config: dict, output: str, compress: bool) -> None:
+def run_backup(config: dict, output: str, compress: bool, include_visits: bool) -> None:
     """Export all short URLs to a JSON file."""
 
     print()
@@ -241,6 +267,19 @@ def run_backup(config: dict, output: str, compress: bool) -> None:
     # Normalize entries
     entries = [_normalize_entry(u) for u in raw_urls]
 
+    # Fetch visits per short URL (archival only, not restorable)
+    total_visits = 0
+    if include_visits:
+        print()
+        print("── Fetching visits (archival) ──────────────────────────")
+        for i, entry in enumerate(entries, 1):
+            code = entry["shortCode"]
+            visits = fetch_visits_for_url(config["url"], config["key"], code)
+            entry["visits"] = visits
+            total_visits += len(visits)
+            print(f"  {i}/{len(entries)} /{code}: {len(visits)} visits", end="\r")
+        print(f"  Total: {total_visits} visits across {len(entries)} URLs        ")
+
     # Build backup document
     backup = {
         "metadata": {
@@ -248,6 +287,8 @@ def run_backup(config: dict, output: str, compress: bool) -> None:
             "created": datetime.now(timezone.utc).isoformat(),
             "server": config["url"],
             "totalUrls": len(entries),
+            "includesVisits": include_visits,
+            "totalVisits": total_visits if include_visits else None,
             "tool": "shlink-backup.py",
         },
         "shortUrls": entries,
@@ -399,6 +440,9 @@ Examples:
   # Backup with gzip compression
   python scripts/shlink-backup.py backup --compress
 
+  # Backup with visit data (archival, not restorable)
+  python scripts/shlink-backup.py backup --include-visits --compress
+
   # Backup to specific file
   python scripts/shlink-backup.py backup --output /backups/shlink.json
 
@@ -424,6 +468,7 @@ Examples:
     bp = sub.add_parser("backup", help="Export all short URLs to JSON")
     bp.add_argument("--output", "-o", help="Output file path (default: auto-generated)")
     bp.add_argument("--compress", "-c", action="store_true", help="Compress with gzip")
+    bp.add_argument("--include-visits", action="store_true", help="Include visit data (archival only, not restorable)")
 
     # restore subcommand
     rp = sub.add_parser("restore", help="Import short URLs from JSON backup")
@@ -444,7 +489,7 @@ def main() -> None:
         sys.exit(1)
 
     if args.command == "backup":
-        run_backup(config, args.output, args.compress)
+        run_backup(config, args.output, args.compress, args.include_visits)
     elif args.command == "restore":
         run_restore(config, args.input, args.skip_existing, args.dry_run)
 
