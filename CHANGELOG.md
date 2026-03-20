@@ -1,3 +1,10 @@
+## [0.3.0](https://github.com/bauer-group/CS-URLShortener/compare/v0.2.0...v0.3.0) (2026-03-20)
+
+### 🚀 Features
+
+* **shlink-cli:** added CLI tool for Shlink short URL management ([d48bb19](https://github.com/bauer-group/CS-URLShortener/commit/d48bb190ecb9a50d605cfe2bd5769cab7c6c62b3))
+* **tooling:** added CLI utilities and Traefik asset routing ([3ce3fc7](https://github.com/bauer-group/CS-URLShortener/commit/3ce3fc73167587923a3198547deccadc9373b1bf))
+
 ## [0.2.0](https://github.com/bauer-group/CS-URLShortener/compare/v0.1.0...v0.2.0) (2026-03-20)
 
 ### 🚀 Features
