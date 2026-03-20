@@ -1,3 +1,14 @@
+## [1.0.0](https://github.com/bauer-group/CS-URLShortener/compare/v0.3.0...v1.0.0) (2026-03-20)
+
+### ⚠ BREAKING CHANGES
+
+* **web-ui:** Admin UI is no longer accessible at /.ui path. Users must access via ui.go.bauer-group.com subdomain. Requires DNS configuration (CNAME or A record pointing to the same server).
+```
+
+### ♻️ Refactoring
+
+* **web-ui:** migrate Admin UI to subdomain-based routing ([009e910](https://github.com/bauer-group/CS-URLShortener/commit/009e910d839683e55a2c983b762ed19a91b2d19d))
+
 ## [0.3.0](https://github.com/bauer-group/CS-URLShortener/compare/v0.2.0...v0.3.0) (2026-03-20)
 
 ### 🚀 Features
