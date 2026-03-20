@@ -1,3 +1,9 @@
+## [0.2.0](https://github.com/bauer-group/CS-URLShortener/compare/v0.1.0...v0.2.0) (2026-03-20)
+
+### 🚀 Features
+
+* **backup:** added visit data archival option ([54a0940](https://github.com/bauer-group/CS-URLShortener/commit/54a09400ecdce07385e8803e964ff3d8dfc3e201))
+
 ## [0.1.0](https://github.com/bauer-group/CS-URLShortener/compare/v0.0.0...v0.1.0) (2026-03-20)
 
 ### 🚀 Features
