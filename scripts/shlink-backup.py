@@ -114,8 +114,8 @@ def _api_request(
     api_key: str,
     method: str,
     path: str,
-    body: dict = None,
-    params: dict = None,
+    body: dict | None = None,
+    params: dict | None = None,
 ) -> tuple:
     """Make a Shlink REST API request. Returns (status_code, response_body)."""
     url = f"{base_url.rstrip('/')}/rest/v3{path}"

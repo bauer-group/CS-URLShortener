@@ -92,8 +92,10 @@ services:
       # Each HTTP worker holds a persistent DB connection.
       # Default 0 = auto-detect (CPU count) — can exhaust DB connections!
       # Formula: POSTGRES_MAX_CONNECTIONS ≥ WEB + TASK + 4
-      WEB_WORKER_NUM: ${WEB_WORKER_NUM:-4}
+      WEB_WORKER_NUM: ${WEB_WORKER_NUM:-8}
       TASK_WORKER_NUM: ${TASK_WORKER_NUM:-2}
+    volumes:
+      - ./config/roadrunner/.rr.yml:/etc/shlink/config/roadrunner/.rr.yml:ro
     expose:
       - 8080/tcp
     healthcheck:
