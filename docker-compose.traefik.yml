@@ -206,7 +206,7 @@ services:
         max-size: "50m"
         max-file: "3"
     command: >
-      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-16}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-32}
       -c shared_buffers=${PG_SHARED_BUFFERS:-128MB}
       -c work_mem=${PG_WORK_MEM:-2MB}
       -c effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-256MB}
