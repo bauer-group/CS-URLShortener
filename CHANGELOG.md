@@ -1,3 +1,9 @@
+## [1.1.1](https://github.com/bauer-group/CS-URLShortener/compare/v1.1.0...v1.1.1) (2026-03-21)
+
+### ⚡ Performance
+
+* **postgres:** updated max_connections default from 16 to 32 ([9fce926](https://github.com/bauer-group/CS-URLShortener/commit/9fce9265a69478ffbac2628e7d84355ac942e598))
+
 ## [1.1.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.0.0...v1.1.0) (2026-03-21)
 
 ### 🚀 Features
