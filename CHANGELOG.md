@@ -1,3 +1,9 @@
+## [1.1.2](https://github.com/bauer-group/CS-URLShortener/compare/v1.1.1...v1.1.2) (2026-03-21)
+
+### 🐛 Bug Fixes
+
+* **docker:** replaced wget with curl in healthchecks ([edfc7dd](https://github.com/bauer-group/CS-URLShortener/commit/edfc7dd385d4a1651286d69513b0b2beeb8fce12))
+
 ## [1.1.1](https://github.com/bauer-group/CS-URLShortener/compare/v1.1.0...v1.1.1) (2026-03-21)
 
 ### ⚡ Performance
