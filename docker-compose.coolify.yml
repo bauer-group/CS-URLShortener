@@ -202,7 +202,7 @@ services:
     restart: unless-stopped
     <<: *logging
     command: >
-      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-32}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-64}
       -c shared_buffers=${PG_SHARED_BUFFERS:-128MB}
       -c work_mem=${PG_WORK_MEM:-2MB}
       -c effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-256MB}
