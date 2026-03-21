@@ -35,7 +35,12 @@ services:
   # ── Shlink Server (URL Shortener Engine) ───────────────────────────────────
   shlink-server:
     <<: *shlink-common
-    image: shlinkio/shlink:${SHLINK_VERSION:-stable}
+    # image: shlinkio/shlink:${SHLINK_VERSION:-stable}
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+      args:
+        SHLINK_VERSION: ${SHLINK_VERSION:-stable}
     container_name: ${STACK_NAME:-url-shortener}_SERVER
     hostname: shlink-server
     environment:
@@ -87,8 +92,6 @@ services:
       # Formula: POSTGRES_MAX_CONNECTIONS ≥ WEB + TASK + 4
       WEB_WORKER_NUM: ${WEB_WORKER_NUM:-8}
       TASK_WORKER_NUM: ${TASK_WORKER_NUM:-2}
-    volumes:
-      - ./config/roadrunner/.rr.yml:/etc/shlink/config/roadrunner/.rr.yml:ro
     expose:
       - 8080/tcp
     ports:
