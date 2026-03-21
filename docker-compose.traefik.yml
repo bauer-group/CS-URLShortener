@@ -86,13 +86,21 @@ services:
 
       # ── GeoIP (optional) ─────────────────────────────────────────
       GEOLITE_LICENSE_KEY: ${SHLINK_GEOLITE_KEY:-}
+
+      # ── RoadRunner Workers ──────────────────────────────────────
+      # Shlink uses RoadRunner with long-running PHP workers.
+      # Each HTTP worker holds a persistent DB connection.
+      # Default 0 = auto-detect (CPU count) — can exhaust DB connections!
+      # Formula: POSTGRES_MAX_CONNECTIONS ≥ WEB + TASK + 4
+      WEB_WORKER_NUM: ${WEB_WORKER_NUM:-4}
+      TASK_WORKER_NUM: ${TASK_WORKER_NUM:-2}
     expose:
       - 8080/tcp
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/rest/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/rest/health || exit 1"]
       interval: 30s
-      timeout: 5s
-      start_period: 15s
+      timeout: 10s
+      start_period: 30s
       retries: 3
     depends_on:
       shlink-db:
@@ -149,7 +157,7 @@ services:
     expose:
       - 8080/tcp
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ || exit 1"]
       interval: 30s
       timeout: 3s
       start_period: 5s
@@ -198,7 +206,7 @@ services:
         max-size: "50m"
         max-file: "3"
     command: >
-      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-20}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-16}
       -c shared_buffers=${PG_SHARED_BUFFERS:-128MB}
       -c work_mem=${PG_WORK_MEM:-2MB}
       -c effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-256MB}
