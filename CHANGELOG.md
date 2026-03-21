@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.0.0...v1.1.0) (2026-03-21)
+
+### 🚀 Features
+
+* **config:** added RoadRunner worker configuration and improved database connection management ([d34d407](https://github.com/bauer-group/CS-URLShortener/commit/d34d407124c1928129a06037f33022413cf9c662))
+
 ## [1.0.0](https://github.com/bauer-group/CS-URLShortener/compare/v0.3.0...v1.0.0) (2026-03-20)
 
 ### ⚠ BREAKING CHANGES
