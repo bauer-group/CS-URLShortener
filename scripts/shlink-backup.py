@@ -19,13 +19,12 @@
 #   python scripts/shlink-backup.py backup --include-visits --compress
 #   python scripts/shlink-backup.py restore --input FILE [--skip-existing] [--dry-run]
 #
-# Configuration is auto-detected from .env file.
-# Override with --url, --key, and --container options.
+# Install:  pip install typer rich
+# Config:   auto-detected from .env file
 #
-# Requirements: Python 3.6+ (no external dependencies)
+# Requirements: Python 3.9+, typer, rich
 # =============================================================================
 
-import argparse
 import gzip
 import json
 import ssl
@@ -37,6 +36,25 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    import typer
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+    from rich import box as rbox
+except ImportError:
+    print("Missing dependencies. Install with:")
+    print("  pip install typer rich")
+    sys.exit(1)
+
+console = Console()
+
+app = typer.Typer(
+    name="shlink-backup",
+    help="Backup & Restore Shlink data via REST API.",
+    no_args_is_help=True,
+)
 
 
 # ── Configuration ─────────────────────────────────────────────────────────
@@ -55,15 +73,14 @@ def _parse_env_file(path: Path) -> dict:
     return result
 
 
-def load_config(args: argparse.Namespace) -> dict:
-    """Build configuration from CLI args and .env file."""
-    config = {
-        "url": args.url,
-        "key": args.key,
-        "container": getattr(args, "container", None),
-    }
+def _load_config(
+    url: str | None = None,
+    key: str | None = None,
+    container: str | None = None,
+) -> dict:
+    """Build configuration from args and .env file."""
+    config = {"url": url, "key": key, "container": container}
 
-    # Auto-detect from .env
     env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():
         env = _parse_env_file(env_path)
@@ -74,13 +91,13 @@ def load_config(args: argparse.Namespace) -> dict:
             if domain:
                 proto = "https" if is_https else "http"
                 config["url"] = f"{proto}://{domain}"
-                print(f"  Server (from .env): {config['url']}")
+                console.print(f"  [dim]Server (from .env):[/dim] {config['url']}")
 
         if not config["key"]:
-            key = env.get("SHLINK_API_KEY", "")
-            if key:
-                config["key"] = key
-                print(f"  API Key (from .env): {key[:8]}...")
+            api_key = env.get("SHLINK_API_KEY", "")
+            if api_key:
+                config["key"] = api_key
+                console.print(f"  [dim]API Key (from .env):[/dim] {api_key[:8]}...")
 
         if not config["container"]:
             stack = env.get("STACK_NAME", "url-shortener")
@@ -99,12 +116,8 @@ def _api_request(
     path: str,
     body: dict = None,
     params: dict = None,
-) -> tuple[int, dict]:
-    """
-    Make a Shlink REST API request.
-
-    Returns (status_code, response_body) tuple.
-    """
+) -> tuple:
+    """Make a Shlink REST API request. Returns (status_code, response_body)."""
     url = f"{base_url.rstrip('/')}/rest/v3{path}"
     if params:
         url += f"?{urllib.parse.urlencode(params)}"
@@ -112,11 +125,10 @@ def _api_request(
     data = json.dumps(body).encode("utf-8") if body else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("X-Api-Key", api_key)
-    req.add_header("User-Agent", "shlink-backup/1.0")
+    req.add_header("User-Agent", "shlink-backup/2.0")
     if body:
         req.add_header("Content-Type", "application/json")
 
-    # Allow self-signed certificates in development
     ctx = ssl.create_default_context()
 
     try:
@@ -130,7 +142,10 @@ def _api_request(
             return e.code, {"detail": raw}
 
 
-def fetch_all_short_urls(base_url: str, api_key: str) -> list[dict]:
+# ── Fetch Functions ──────────────────────────────────────────────────────
+
+
+def _fetch_all_short_urls(base_url: str, api_key: str) -> list:
     """Fetch all short URLs from Shlink (handles pagination)."""
     all_urls = []
     page = 1
@@ -141,7 +156,6 @@ def fetch_all_short_urls(base_url: str, api_key: str) -> list[dict]:
             base_url, api_key, "GET", "/short-urls",
             params={"page": page, "itemsPerPage": 50},
         )
-
         if status != 200:
             detail = data.get("detail", data.get("title", "Unknown error"))
             raise RuntimeError(f"API error {status}: {detail}")
@@ -150,17 +164,14 @@ def fetch_all_short_urls(base_url: str, api_key: str) -> list[dict]:
         items = short_urls.get("data", [])
         pagination = short_urls.get("pagination", {})
         total_pages = pagination.get("pagesCount", 1)
-        total_items = pagination.get("totalItems", 0)
 
         all_urls.extend(items)
-        print(f"  Fetched {len(all_urls)}/{total_items} URLs...", end="\r")
         page += 1
 
-    print(f"  Fetched {len(all_urls)} URLs              ")
     return all_urls
 
 
-def fetch_visits_for_url(base_url: str, api_key: str, short_code: str) -> list[dict]:
+def _fetch_visits_for_url(base_url: str, api_key: str, short_code: str) -> list:
     """Fetch all visits for a short URL (handles pagination)."""
     all_visits = []
     page = 1
@@ -171,7 +182,6 @@ def fetch_visits_for_url(base_url: str, api_key: str, short_code: str) -> list[d
             base_url, api_key, "GET", f"/short-urls/{short_code}/visits",
             params={"page": page, "itemsPerPage": 100},
         )
-
         if status != 200:
             break
 
@@ -186,7 +196,7 @@ def fetch_visits_for_url(base_url: str, api_key: str, short_code: str) -> list[d
     return all_visits
 
 
-def fetch_redirect_rules(base_url: str, api_key: str, short_code: str) -> list[dict]:
+def _fetch_redirect_rules(base_url: str, api_key: str, short_code: str) -> list:
     """Fetch redirect rules for a short URL."""
     status, data = _api_request(
         base_url, api_key, "GET", f"/short-urls/{short_code}/redirect-rules",
@@ -196,7 +206,7 @@ def fetch_redirect_rules(base_url: str, api_key: str, short_code: str) -> list[d
     return data.get("redirectRules", [])
 
 
-def fetch_domains(base_url: str, api_key: str) -> list[dict]:
+def _fetch_domains(base_url: str, api_key: str) -> list:
     """Fetch all configured domains with their redirect settings."""
     status, data = _api_request(base_url, api_key, "GET", "/domains")
     if status != 200:
@@ -204,7 +214,7 @@ def fetch_domains(base_url: str, api_key: str) -> list[dict]:
     return data.get("domains", {}).get("data", [])
 
 
-def fetch_tags(base_url: str, api_key: str) -> list[dict]:
+def _fetch_tags(base_url: str, api_key: str) -> list:
     """Fetch all tags with stats."""
     status, data = _api_request(
         base_url, api_key, "GET", "/tags/stats",
@@ -216,6 +226,32 @@ def fetch_tags(base_url: str, api_key: str) -> list[dict]:
 
 
 # ── Docker Exec (API Keys) ───────────────────────────────────────────────
+
+
+def _find_container(hint: str | None = None) -> str:
+    """Find the running Shlink container by image or name hint.
+
+    Coolify generates dynamic container names (e.g. shlink-server-a12x...),
+    so we resolve the actual name via `docker ps --filter ancestor=...`.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "ancestor=shlinkio/shlink",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            names = result.stdout.strip().splitlines()
+            if len(names) == 1:
+                return names[0]
+            if hint:
+                for name in names:
+                    if hint.lower() in name.lower():
+                        return name
+            return names[0]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return hint or "shlink-server"
 
 
 def _docker_exec(container: str, *cmd: str) -> tuple:
@@ -235,13 +271,12 @@ def _docker_exec(container: str, *cmd: str) -> tuple:
         return -1, "command timed out"
 
 
-def fetch_api_keys(container: str) -> list[dict]:
+def _fetch_api_keys(container: str) -> list:
     """Fetch API key metadata via docker exec (keys are hashed, not exportable)."""
     rc, output = _docker_exec(container, "shlink", "api-key:list")
     if rc != 0:
         return []
 
-    # Parse the Symfony console table output
     keys = []
     for line in output.splitlines():
         line = line.strip()
@@ -259,12 +294,11 @@ def fetch_api_keys(container: str) -> list[dict]:
     return keys
 
 
-def create_short_url(base_url: str, api_key: str, entry: dict) -> tuple[bool, str]:
-    """
-    Create a short URL in Shlink from a backup entry.
+# ── Create / Restore Helpers ─────────────────────────────────────────────
 
-    Returns (success, message) tuple.
-    """
+
+def _create_short_url(base_url: str, api_key: str, entry: dict) -> tuple:
+    """Create a short URL from a backup entry. Returns (success, message)."""
     body = {
         "longUrl": entry["longUrl"],
         "customSlug": entry["shortCode"],
@@ -272,27 +306,15 @@ def create_short_url(base_url: str, api_key: str, entry: dict) -> tuple[bool, st
         "validateUrl": False,
     }
 
-    # Optional fields
-    if entry.get("tags"):
-        body["tags"] = entry["tags"]
-    if entry.get("title"):
-        body["title"] = entry["title"]
-    if entry.get("domain"):
-        body["domain"] = entry["domain"]
-    if entry.get("crawlable"):
-        body["crawlable"] = entry["crawlable"]
+    for field in ("tags", "title", "domain", "crawlable"):
+        if entry.get(field):
+            body[field] = entry[field]
     if entry.get("forwardQuery") is not None:
         body["forwardQuery"] = entry["forwardQuery"]
+    for meta_field in ("validSince", "validUntil", "maxVisits"):
+        if entry.get(meta_field):
+            body[meta_field] = entry[meta_field]
 
-    # Meta fields (validSince, validUntil, maxVisits)
-    if entry.get("validSince"):
-        body["validSince"] = entry["validSince"]
-    if entry.get("validUntil"):
-        body["validUntil"] = entry["validUntil"]
-    if entry.get("maxVisits"):
-        body["maxVisits"] = entry["maxVisits"]
-
-    # Device-specific long URLs
     device_urls = entry.get("deviceLongUrls", {})
     if device_urls and any(v for v in device_urls.values()):
         body["deviceLongUrls"] = device_urls
@@ -301,13 +323,11 @@ def create_short_url(base_url: str, api_key: str, entry: dict) -> tuple[bool, st
 
     if status in (200, 201):
         return True, f"/{data.get('shortCode', entry['shortCode'])}"
-    else:
-        detail = data.get("detail", data.get("title", f"HTTP {status}"))
-        return False, detail
+    return False, data.get("detail", data.get("title", f"HTTP {status}"))
 
 
-def restore_redirect_rules(
-    base_url: str, api_key: str, short_code: str, rules: list[dict],
+def _restore_redirect_rules(
+    base_url: str, api_key: str, short_code: str, rules: list,
 ) -> tuple:
     """Restore redirect rules for a short URL. Returns (success, message)."""
     if not rules:
@@ -322,9 +342,7 @@ def restore_redirect_rules(
     return False, data.get("detail", f"HTTP {status}")
 
 
-def restore_domain_redirects(
-    base_url: str, api_key: str, domain: dict,
-) -> tuple:
+def _restore_domain_redirects(base_url: str, api_key: str, domain: dict) -> tuple:
     """Restore redirect settings for a domain. Returns (success, message)."""
     redirects = domain.get("redirects", {})
     if not redirects or not any(redirects.values()):
@@ -341,7 +359,7 @@ def restore_domain_redirects(
     return False, data.get("detail", f"HTTP {status}")
 
 
-# ── Backup ────────────────────────────────────────────────────────────────
+# ── Normalize ─────────────────────────────────────────────────────────────
 
 
 def _normalize_entry(raw: dict) -> dict:
@@ -364,80 +382,93 @@ def _normalize_entry(raw: dict) -> dict:
     }
 
 
-def run_backup(config: dict, args: argparse.Namespace) -> None:
-    """Export all Shlink data to a JSON file."""
-    output = args.output
-    compress = args.compress
-    include_visits = args.include_visits
+# ── Backup Command ───────────────────────────────────────────────────────
 
-    print()
-    print("╔═══════════════════════════════════════════════════════╗")
-    print("║         Shlink Backup                                 ║")
-    print("╚═══════════════════════════════════════════════════════╝")
-    print()
+
+@app.command()
+def backup(
+    output: str = typer.Option(None, "--output", "-o", help="Output file path (default: auto-generated)"),
+    compress: bool = typer.Option(False, "--compress", "-c", help="Compress with gzip"),
+    include_visits: bool = typer.Option(False, "--include-visits", help="Include visit data (archival, not restorable)"),
+    url: str = typer.Option(None, "--url", help="Shlink server URL (auto-detected from .env)"),
+    key: str = typer.Option(None, "--key", help="API key (auto-detected from .env)"),
+    container: str = typer.Option(None, "--container", help="Docker container name (auto-detected from .env)"),
+):
+    """Export all Shlink data to a JSON file."""
+    config = _load_config(url, key, container)
+
+    if not config["url"] or not config["key"]:
+        console.print("[red]✗[/red] Shlink URL and API key are required.")
+        console.print("  Set in .env or pass --url and --key")
+        raise typer.Exit(1)
+
+    console.print(Panel("[bold]Shlink Backup[/bold]", box=rbox.HEAVY))
 
     # ── Short URLs ────────────────────────────────────────────
-    print("── Fetching short URLs ─────────────────────────────────")
-    raw_urls = fetch_all_short_urls(config["url"], config["key"])
+    console.print("\n[bold]── Short URLs ──[/bold]")
+    with console.status("Fetching short URLs..."):
+        raw_urls = _fetch_all_short_urls(config["url"], config["key"])
 
     if not raw_urls:
-        print("  No short URLs found. Nothing to back up.")
+        console.print("  No short URLs found. Nothing to back up.")
         return
 
     entries = [_normalize_entry(u) for u in raw_urls]
+    console.print(f"  {len(entries)} URLs fetched")
 
     # ── Redirect Rules ────────────────────────────────────────
-    print()
-    print("── Fetching redirect rules ────────────────────────────")
+    console.print("\n[bold]── Redirect Rules ──[/bold]")
     rules_count = 0
-    for i, entry in enumerate(entries, 1):
-        code = entry["shortCode"]
-        rules = fetch_redirect_rules(config["url"], config["key"], code)
-        if rules:
-            entry["redirectRules"] = rules
-            rules_count += len(rules)
-        print(f"  {i}/{len(entries)}...", end="\r")
-    print(f"  {rules_count} redirect rules across {len(entries)} URLs        ")
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), BarColumn(),
+                  TextColumn("{task.completed}/{task.total}"), console=console) as progress:
+        task = progress.add_task("Fetching rules...", total=len(entries))
+        for entry in entries:
+            rules = _fetch_redirect_rules(config["url"], config["key"], entry["shortCode"])
+            if rules:
+                entry["redirectRules"] = rules
+                rules_count += len(rules)
+            progress.advance(task)
+    console.print(f"  {rules_count} redirect rules")
 
-    # ── Visits (optional, archival) ───────────────────────────
+    # ── Visits (optional) ─────────────────────────────────────
     total_visits = 0
     if include_visits:
-        print()
-        print("── Fetching visits (archival) ──────────────────────────")
-        for i, entry in enumerate(entries, 1):
-            code = entry["shortCode"]
-            visits = fetch_visits_for_url(config["url"], config["key"], code)
-            entry["visits"] = visits
-            total_visits += len(visits)
-            print(f"  {i}/{len(entries)} /{code}: {len(visits)} visits", end="\r")
-        print(f"  Total: {total_visits} visits across {len(entries)} URLs        ")
+        console.print("\n[bold]── Visits (archival) ──[/bold]")
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), BarColumn(),
+                      TextColumn("{task.completed}/{task.total}"), console=console) as progress:
+            task = progress.add_task("Fetching visits...", total=len(entries))
+            for entry in entries:
+                visits = _fetch_visits_for_url(config["url"], config["key"], entry["shortCode"])
+                entry["visits"] = visits
+                total_visits += len(visits)
+                progress.advance(task)
+        console.print(f"  {total_visits} visits")
 
     # ── Domains ───────────────────────────────────────────────
-    print()
-    print("── Fetching domains ───────────────────────────────────")
-    domains = fetch_domains(config["url"], config["key"])
-    print(f"  {len(domains)} domains")
+    console.print("\n[bold]── Domains ──[/bold]")
+    with console.status("Fetching domains..."):
+        domains = _fetch_domains(config["url"], config["key"])
+    console.print(f"  {len(domains)} domains")
 
     # ── Tags ──────────────────────────────────────────────────
-    print()
-    print("── Fetching tags ──────────────────────────────────────")
-    tags = fetch_tags(config["url"], config["key"])
-    print(f"  {len(tags)} tags")
+    console.print("\n[bold]── Tags ──[/bold]")
+    with console.status("Fetching tags..."):
+        tags = _fetch_tags(config["url"], config["key"])
+    console.print(f"  {len(tags)} tags")
 
-    # ── API Keys (informational, via docker exec) ─────────────
+    # ── API Keys ──────────────────────────────────────────────
     api_keys = []
-    container = config.get("container")
-    if container:
-        print()
-        print("── Fetching API keys (informational) ──────────────────")
-        api_keys = fetch_api_keys(container)
+    if config.get("container"):
+        console.print("\n[bold]── API Keys (informational) ──[/bold]")
+        container = _find_container(config.get("container"))
+        api_keys = _fetch_api_keys(container)
         if api_keys:
-            print(f"  {len(api_keys)} API keys (hashed — not restorable)")
+            console.print(f"  {len(api_keys)} API keys (hashed — not restorable)")
         else:
-            print("  Skipped (docker not available or container not running)")
+            console.print("  [dim]Skipped (docker not available or container not running)[/dim]")
 
-    # ── Build backup document ─────────────────────────────────
-    backup = {
+    # ── Build & write ─────────────────────────────────────────
+    backup_doc = {
         "metadata": {
             "version": "2.0",
             "created": datetime.now(timezone.utc).isoformat(),
@@ -457,16 +488,13 @@ def run_backup(config: dict, args: argparse.Namespace) -> None:
         "apiKeys": api_keys if api_keys else None,
     }
 
-    # Determine output path
     if not output:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         ext = ".json.gz" if compress else ".json"
         output = f"shlink-backup_{timestamp}{ext}"
 
-    # Write file
-    print()
-    print("── Writing backup ─────────────────────────────────────")
-    content = json.dumps(backup, indent=2, ensure_ascii=False).encode("utf-8")
+    console.print("\n[bold]── Writing backup ──[/bold]")
+    content = json.dumps(backup_doc, indent=2, ensure_ascii=False).encode("utf-8")
 
     out_path = Path(output)
     if compress:
@@ -477,69 +505,69 @@ def run_backup(config: dict, args: argparse.Namespace) -> None:
         out_path.write_bytes(content)
 
     size_kb = out_path.stat().st_size / 1024
-    print(f"  ✓ {len(entries)} short URLs saved to {out_path} ({size_kb:.1f} KB)")
-    print()
+    console.print(f"[green]✓[/green] {len(entries)} short URLs saved to {out_path} ({size_kb:.1f} KB)\n")
 
 
-# ── Restore ───────────────────────────────────────────────────────────────
+# ── Restore Command ──────────────────────────────────────────────────────
 
 
-def run_restore(config: dict, args: argparse.Namespace) -> None:
-    """Restore Shlink data from a backup file."""
-    input_file = args.input
-    skip_existing = args.skip_existing
-    dry_run = args.dry_run
+@app.command()
+def restore(
+    input_file: str = typer.Option(..., "--input", "-i", help="Backup file to restore from"),
+    skip_existing: bool = typer.Option(False, "--skip-existing", help="Silently skip existing URLs"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without making changes"),
+    url: str = typer.Option(None, "--url", help="Shlink server URL (auto-detected from .env)"),
+    key: str = typer.Option(None, "--key", help="API key (auto-detected from .env)"),
+    container: str = typer.Option(None, "--container", help="Docker container name (auto-detected from .env)"),
+):
+    """Restore Shlink data from a JSON backup file."""
+    config = _load_config(url, key, container)
 
-    print()
-    print("╔═══════════════════════════════════════════════════════╗")
-    if dry_run:
-        print("║         Shlink Restore (DRY RUN)                     ║")
-    else:
-        print("║         Shlink Restore                                ║")
-    print("╚═══════════════════════════════════════════════════════╝")
-    print()
+    if not config["url"] or not config["key"]:
+        console.print("[red]✗[/red] Shlink URL and API key are required.")
+        console.print("  Set in .env or pass --url and --key")
+        raise typer.Exit(1)
 
-    # Read backup file
-    print("── Reading backup ─────────────────────────────────────")
+    title = "Shlink Restore (DRY RUN)" if dry_run else "Shlink Restore"
+    console.print(Panel(f"[bold]{title}[/bold]", box=rbox.HEAVY))
+
+    # ── Read backup ───────────────────────────────────────────
+    console.print("\n[bold]── Reading backup ──[/bold]")
     in_path = Path(input_file)
     if not in_path.exists():
-        print(f"  ✗ File not found: {in_path}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] File not found: {in_path}")
+        raise typer.Exit(1)
 
     raw = in_path.read_bytes()
     if in_path.suffix == ".gz" or in_path.suffixes[-2:] == [".json", ".gz"]:
         raw = gzip.decompress(raw)
-    backup = json.loads(raw.decode("utf-8"))
+    backup_data = json.loads(raw.decode("utf-8"))
 
-    # Validate format
-    if "shortUrls" not in backup:
-        print("  ✗ Invalid backup file: 'shortUrls' key missing.", file=sys.stderr)
-        sys.exit(1)
+    if "shortUrls" not in backup_data:
+        console.print("[red]✗[/red] Invalid backup file: 'shortUrls' key missing.")
+        raise typer.Exit(1)
 
-    entries = backup["shortUrls"]
-    domains = backup.get("domains", [])
-    meta = backup.get("metadata", {})
+    entries = backup_data["shortUrls"]
+    domains = backup_data.get("domains", [])
+    meta = backup_data.get("metadata", {})
     version = meta.get("version", "1.0")
 
-    print(f"  Format:  v{version}")
-    print(f"  Source:  {meta.get('server', 'unknown')}")
-    print(f"  Created: {meta.get('created', 'unknown')}")
-    print(f"  URLs:    {len(entries)}")
+    console.print(f"  [dim]Format:[/dim]  v{version}")
+    console.print(f"  [dim]Source:[/dim]  {meta.get('server', 'unknown')}")
+    console.print(f"  [dim]Created:[/dim] {meta.get('created', 'unknown')}")
+    console.print(f"  [dim]URLs:[/dim]    {len(entries)}")
     if domains:
-        print(f"  Domains: {len(domains)}")
+        console.print(f"  [dim]Domains:[/dim] {len(domains)}")
     if meta.get("apiKeysIncluded"):
-        print(f"  API Keys: {meta['apiKeysIncluded']} (informational, not restorable)")
+        console.print(f"  [dim]API Keys:[/dim] {meta['apiKeysIncluded']} (informational, not restorable)")
 
     if not entries and not domains:
-        print("  Nothing to restore.")
+        console.print("  Nothing to restore.")
         return
 
     # ── Restore short URLs ────────────────────────────────────
-    print()
-    if dry_run:
-        print("── Preview (no changes) ───────────────────────────────")
-    else:
-        print("── Restoring short URLs ───────────────────────────────")
+    label = "Preview (no changes)" if dry_run else "Restoring short URLs"
+    console.print(f"\n[bold]── {label} ──[/bold]")
 
     created = 0
     skipped = 0
@@ -548,166 +576,82 @@ def run_restore(config: dict, args: argparse.Namespace) -> None:
 
     for i, entry in enumerate(entries, 1):
         code = entry.get("shortCode", "?")
-        url = entry.get("longUrl", "?")
-        url_short = url[:60] + ("..." if len(url) > 60 else "")
+        entry_url = entry.get("longUrl", "?")
+        url_short = entry_url[:60] + ("..." if len(entry_url) > 60 else "")
 
         if dry_run:
             rules = entry.get("redirectRules", [])
             suffix = f" (+{len(rules)} rules)" if rules else ""
-            print(f"  [{i}/{len(entries)}] /{code} → {url_short}{suffix}")
+            console.print(f"  [{i}/{len(entries)}] [cyan]/{code}[/cyan] → {url_short}{suffix}")
             created += 1
             continue
 
-        ok, msg = create_short_url(config["url"], config["key"], entry)
+        ok, msg = _create_short_url(config["url"], config["key"], entry)
 
         if ok:
             created += 1
-            print(f"  ✓ [{i}/{len(entries)}] /{code} → {url_short}")
+            console.print(f"  [green]✓[/green] [{i}/{len(entries)}] /{code} → {url_short}")
         elif "already" in msg.lower() or "slug" in msg.lower():
             skipped += 1
-            if skip_existing:
-                print(f"  ○ [{i}/{len(entries)}] /{code} (exists, skipped)")
-            else:
-                print(f"  ○ [{i}/{len(entries)}] /{code} (already exists)")
+            console.print(f"  [dim]○[/dim] [{i}/{len(entries)}] /{code} (exists, skipped)")
         else:
             failed += 1
-            errors.append({"shortCode": code, "longUrl": url, "error": msg})
-            print(f"  ✗ [{i}/{len(entries)}] /{code} — {msg}")
+            errors.append({"shortCode": code, "longUrl": entry_url, "error": msg})
+            console.print(f"  [red]✗[/red] [{i}/{len(entries)}] /{code} — {msg}")
 
-        # Rate limiting
         if i % 10 == 0:
             time.sleep(0.1)
 
     # ── Restore redirect rules ────────────────────────────────
     rules_with_data = [e for e in entries if e.get("redirectRules")]
     if rules_with_data and not dry_run:
-        print()
-        print("── Restoring redirect rules ───────────────────────────")
+        console.print("\n[bold]── Restoring redirect rules ──[/bold]")
         rules_ok = 0
         rules_fail = 0
         for entry in rules_with_data:
             code = entry["shortCode"]
-            ok, msg = restore_redirect_rules(
+            ok, msg = _restore_redirect_rules(
                 config["url"], config["key"], code, entry["redirectRules"],
             )
             if ok:
                 rules_ok += 1
-                print(f"  ✓ /{code}: {msg}")
+                console.print(f"  [green]✓[/green] /{code}: {msg}")
             else:
                 rules_fail += 1
-                print(f"  ✗ /{code}: {msg}")
-        print(f"  {rules_ok} restored, {rules_fail} failed")
+                console.print(f"  [red]✗[/red] /{code}: {msg}")
+        console.print(f"  {rules_ok} restored, {rules_fail} failed")
 
     # ── Restore domain redirects ──────────────────────────────
     non_default_domains = [d for d in domains if not d.get("isDefault", False)]
     if non_default_domains and not dry_run:
-        print()
-        print("── Restoring domain redirects ─────────────────────────")
+        console.print("\n[bold]── Restoring domain redirects ──[/bold]")
         for domain in non_default_domains:
-            ok, msg = restore_domain_redirects(
-                config["url"], config["key"], domain,
-            )
+            ok, msg = _restore_domain_redirects(config["url"], config["key"], domain)
             if ok:
-                print(f"  ✓ {msg}")
+                console.print(f"  [green]✓[/green] {msg}")
             else:
-                print(f"  ✗ {domain.get('authority', '?')}: {msg}")
+                console.print(f"  [red]✗[/red] {domain.get('authority', '?')}: {msg}")
 
     # ── Summary ───────────────────────────────────────────────
-    print()
-    print("── Summary ────────────────────────────────────────────")
-    print(f"  Total:   {len(entries)}")
+    console.print("\n[bold]── Summary ──[/bold]")
+    console.print(f"  [bold]Total:[/bold]   {len(entries)}")
     if dry_run:
-        print(f"  Preview: {created} URLs would be restored")
+        console.print(f"  Preview: {created} URLs would be restored")
         if rules_with_data:
-            print(f"  Rules:   {sum(len(e['redirectRules']) for e in rules_with_data)} redirect rules")
+            console.print(f"  Rules:   {sum(len(e['redirectRules']) for e in rules_with_data)} redirect rules")
         if non_default_domains:
-            print(f"  Domains: {len(non_default_domains)} domain redirects")
+            console.print(f"  Domains: {len(non_default_domains)} domain redirects")
     else:
-        print(f"  Created: {created}")
-        print(f"  Skipped: {skipped} (already exist)")
+        console.print(f"  [green]Created:[/green] {created}")
+        console.print(f"  [dim]Skipped:[/dim] {skipped} (already exist)")
         if failed:
-            print(f"  Failed:  {failed}")
-            print()
-            print("  Failed URLs:")
+            console.print(f"  [red]Failed:[/red]  {failed}")
+            console.print()
+            console.print("  Failed URLs:")
             for err in errors:
-                print(f"    /{err['shortCode']} — {err['error']}")
-    print()
-
-
-# ── CLI ───────────────────────────────────────────────────────────────────
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Backup & Restore Shlink data via REST API.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Backed up data:
-  - Short URLs (definitions, tags, meta, device URLs)
-  - Redirect rules per short URL
-  - Domain redirect settings
-  - Tags with stats
-  - API key metadata (informational, requires docker access)
-  - Visit data (optional, archival reference)
-
-Examples:
-  # Full backup (auto-detects config from .env)
-  python scripts/shlink-backup.py backup --compress
-
-  # Full backup with visit archive
-  python scripts/shlink-backup.py backup --include-visits --compress
-
-  # Backup to specific file
-  python scripts/shlink-backup.py backup --output /backups/shlink.json
-
-  # Preview restore (no changes)
-  python scripts/shlink-backup.py restore --input shlink-backup_2026-03-20.json --dry-run
-
-  # Restore, skipping existing URLs
-  python scripts/shlink-backup.py restore --input shlink-backup_2026-03-20.json --skip-existing
-
-  # Restore to a different Shlink instance
-  python scripts/shlink-backup.py restore --input backup.json \\
-    --url https://new.example.com --key NEW_API_KEY
-        """,
-    )
-
-    # Global options
-    parser.add_argument("--url", help="Shlink server URL (auto-detected from .env)")
-    parser.add_argument("--key", help="Shlink API key (auto-detected from .env)")
-    parser.add_argument("--container", help="Docker container name (auto-detected from .env)")
-
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    # backup subcommand
-    bp = sub.add_parser("backup", help="Export all Shlink data to JSON")
-    bp.add_argument("--output", "-o", help="Output file path (default: auto-generated)")
-    bp.add_argument("--compress", "-c", action="store_true", help="Compress with gzip")
-    bp.add_argument("--include-visits", action="store_true", help="Include visit data (archival reference, not restorable)")
-
-    # restore subcommand
-    rp = sub.add_parser("restore", help="Restore Shlink data from JSON backup")
-    rp.add_argument("--input", "-i", required=True, help="Backup file to restore from")
-    rp.add_argument("--skip-existing", action="store_true", help="Silently skip existing URLs")
-    rp.add_argument("--dry-run", action="store_true", help="Preview without making changes")
-
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    config = load_config(args)
-
-    if not config["url"] or not config["key"]:
-        print("✗ Shlink URL and API key are required.", file=sys.stderr)
-        print("  Set in .env or pass --url and --key", file=sys.stderr)
-        sys.exit(1)
-
-    if args.command == "backup":
-        run_backup(config, args)
-    elif args.command == "restore":
-        run_restore(config, args)
+                console.print(f"    /{err['shortCode']} — {err['error']}")
+    console.print()
 
 
 if __name__ == "__main__":
-    main()
+    app()

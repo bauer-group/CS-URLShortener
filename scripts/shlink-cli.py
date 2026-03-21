@@ -7,26 +7,25 @@
 #
 # Usage:
 #   python scripts/shlink-cli.py list [--tag TAG]
-#   python scripts/shlink-cli.py create <long-url> [--slug SLUG] [--tag TAG]
-#   python scripts/shlink-cli.py info <short-code>
-#   python scripts/shlink-cli.py update <short-code> [--url URL] [--title TITLE]
-#   python scripts/shlink-cli.py delete <short-code> [--yes]
-#   python scripts/shlink-cli.py visits <short-code> [--detail]
-#   python scripts/shlink-cli.py tags
-#   python scripts/shlink-cli.py tag-rename <old> <new>
-#   python scripts/shlink-cli.py tag-delete <tag> [--yes]
+#   python scripts/shlink-cli.py create <url> [--slug SLUG] [--tag TAG]
+#   python scripts/shlink-cli.py info <code>
+#   python scripts/shlink-cli.py update <code> [--url URL] [--title TITLE]
+#   python scripts/shlink-cli.py delete <code> [--yes]
+#   python scripts/shlink-cli.py visits <code> [--detail]
+#   python scripts/shlink-cli.py tag list
+#   python scripts/shlink-cli.py tag rename <old> <new>
+#   python scripts/shlink-cli.py tag delete <tag>
 #   python scripts/shlink-cli.py health
-#   python scripts/shlink-cli.py keys
-#   python scripts/shlink-cli.py key-add [--name NAME] [--expiration DATE]
-#   python scripts/shlink-cli.py key-disable <api-key> [--yes]
+#   python scripts/shlink-cli.py key list
+#   python scripts/shlink-cli.py key add [--name NAME] [--expiration DATE]
+#   python scripts/shlink-cli.py key disable <key>
 #
-# Configuration is auto-detected from .env file.
-# Override with --server, --key, and --container options.
+# Install:  pip install typer rich
+# Config:   auto-detected from .env file
 #
-# Requirements: Python 3.6+ (no external dependencies)
+# Requirements: Python 3.9+, typer, rich
 # =============================================================================
 
-import argparse
 import http.client
 import json
 import ssl
@@ -34,6 +33,41 @@ import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
+
+try:
+    import typer
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich import box as rbox
+except ImportError:
+    print("Missing dependencies. Install with:")
+    print("  pip install typer rich")
+    sys.exit(1)
+
+console = Console()
+
+# ── Typer Apps ────────────────────────────────────────────────────────────
+
+app = typer.Typer(
+    name="shlink",
+    help="Manage Shlink short URLs, tags, visits, and API keys.",
+    no_args_is_help=True,
+)
+
+tag_app = typer.Typer(
+    name="tag",
+    help="Tag management (list, rename, delete).",
+    no_args_is_help=True,
+)
+app.add_typer(tag_app, name="tag")
+
+key_app = typer.Typer(
+    name="key",
+    help="API key management via docker exec (list, add, disable).",
+    no_args_is_help=True,
+)
+app.add_typer(key_app, name="key")
 
 
 # ── Configuration ─────────────────────────────────────────────────────────
@@ -52,13 +86,13 @@ def _parse_env_file(path: Path) -> dict:
     return result
 
 
-def load_config(args: argparse.Namespace) -> dict:
-    """Build configuration from CLI args and .env file."""
-    config = {
-        "url": getattr(args, "server", None),
-        "key": getattr(args, "key", None),
-        "container": getattr(args, "container", None),
-    }
+def _load_config(
+    server: str | None = None,
+    key: str | None = None,
+    container: str | None = None,
+) -> dict:
+    """Build configuration from args and .env file."""
+    config = {"url": server, "key": key, "container": container}
 
     env_path = Path(__file__).resolve().parent.parent / ".env"
     if not env_path.exists():
@@ -82,15 +116,19 @@ def load_config(args: argparse.Namespace) -> dict:
     return config
 
 
+def _require_api(config: dict) -> None:
+    """Exit if API credentials are missing."""
+    if not config["url"] or not config["key"]:
+        console.print("[red]✗[/red] Shlink URL and API key are required.")
+        console.print("  Set in .env or pass --server and --key")
+        raise typer.Exit(1)
+
+
 # ── API Client ────────────────────────────────────────────────────────────
 
 
-def api(config: dict, method: str, path: str, body: dict = None, params: dict = None) -> tuple[int, dict]:
-    """
-    Shlink REST API call via http.client.
-
-    Fresh TCP connection per request to avoid urllib hang issues on Windows.
-    """
+def _api(config: dict, method: str, path: str, body: dict = None, params: dict = None) -> tuple:
+    """Shlink REST API call. Fresh TCP connection per request (Windows safe)."""
     parsed = urllib.parse.urlparse(config["url"])
     host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -126,11 +164,41 @@ def api(config: dict, method: str, path: str, body: dict = None, params: dict = 
             return status, {"detail": raw[:200]}
 
     except Exception as e:
-        print(f"  Connection error: {e}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] Connection error: {e}")
+        raise typer.Exit(1)
 
 
 # ── Docker Exec ───────────────────────────────────────────────────────────
+
+
+def _find_container(hint: str | None = None) -> str:
+    """Find the running Shlink container by image or name hint.
+
+    Coolify generates dynamic container names (e.g. shlink-server-a12x...),
+    so we resolve the actual name via `docker ps --filter ancestor=...`.
+    """
+    try:
+        # Find by image (works with any container name)
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "ancestor=shlinkio/shlink",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            names = result.stdout.strip().splitlines()
+            if len(names) == 1:
+                return names[0]
+            # Multiple matches — prefer the one matching the hint
+            if hint:
+                for name in names:
+                    if hint.lower() in name.lower():
+                        return name
+            return names[0]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Fallback to hint or default
+    return hint or "shlink-server"
 
 
 def _docker_exec(container: str, *cmd: str) -> tuple:
@@ -145,40 +213,57 @@ def _docker_exec(container: str, *cmd: str) -> tuple:
             output = result.stderr.strip() or output
         return result.returncode, output
     except FileNotFoundError:
-        print("  ✗ docker not found. Run this from the Docker host.", file=sys.stderr)
-        sys.exit(1)
+        console.print("[red]✗[/red] docker not found. Run this from the Docker host.")
+        raise typer.Exit(1)
     except subprocess.TimeoutExpired:
-        print("  ✗ Command timed out.", file=sys.stderr)
-        sys.exit(1)
+        console.print("[red]✗[/red] Command timed out.")
+        raise typer.Exit(1)
 
 
-# ── Commands ──────────────────────────────────────────────────────────────
+# ── Global Options (callback) ────────────────────────────────────────────
+# Typer stores global options via a callback on the main app.
+
+_global_config: dict = {}
 
 
-def cmd_list(config: dict, args: argparse.Namespace) -> None:
+@app.callback()
+def main(
+    server: str = typer.Option(None, "--server", "-s", help="Shlink server URL (auto-detected from .env)"),
+    key: str = typer.Option(None, "--key", "-k", help="API key (auto-detected from .env)"),
+    container: str = typer.Option(None, "--container", "-c", help="Docker container name (auto-detected from .env)"),
+):
+    """Manage Shlink short URLs, tags, visits, and API keys."""
+    global _global_config
+    _global_config = _load_config(server, key, container)
+
+
+# ── Short URL Commands ───────────────────────────────────────────────────
+
+
+@app.command("list")
+def cmd_list(
+    tag: str = typer.Option(None, "--tag", "-t", help="Filter by tag"),
+):
     """List all short URLs."""
+    _require_api(_global_config)
     page = 1
     total_pages = 1
-    count = 0
+    rows = []
 
     while page <= total_pages:
         params = {"page": page, "itemsPerPage": 50}
-        if args.tag:
-            params["tags[]"] = args.tag
+        if tag:
+            params["tags[]"] = tag
 
-        status, data = api(config, "GET", "/short-urls", params=params)
+        status, data = _api(_global_config, "GET", "/short-urls", params=params)
         if status != 200:
-            print(f"  Error: {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
-            sys.exit(1)
+            console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+            raise typer.Exit(1)
 
         short_urls = data.get("shortUrls", {})
         items = short_urls.get("data", [])
         pagination = short_urls.get("pagination", {})
         total_pages = pagination.get("pagesCount", 1)
-        total_items = pagination.get("totalItems", 0)
-
-        if page == 1:
-            print(f"  {total_items} short URLs\n")
 
         for item in items:
             code = item.get("shortCode", "?")
@@ -186,253 +271,308 @@ def cmd_list(config: dict, args: argparse.Namespace) -> None:
             title = item.get("title") or ""
             tags = ", ".join(item.get("tags", []))
             visits = item.get("visitsSummary", {}).get("total", 0)
-
-            line = f"  /{code:<20s} → {url[:60]}"
-            if title:
-                line += f"\n  {'':<23s}  {title[:60]}"
-            meta = []
-            if tags:
-                meta.append(f"tags: {tags}")
-            if visits:
-                meta.append(f"{visits} visits")
-            if meta:
-                line += f"\n  {'':<23s}  [{', '.join(meta)}]"
-            print(line)
-            count += 1
+            rows.append((f"/{code}", url[:60], title[:40], tags[:30], str(visits)))
 
         page += 1
 
-    if count == 0:
-        print("  No short URLs found.")
+    if not rows:
+        console.print("  No short URLs found.")
+        return
+
+    tbl = Table(title=f"{len(rows)} Short URLs", box=rbox.SIMPLE_HEAVY, title_style="bold")
+    tbl.add_column("Code", style="cyan")
+    tbl.add_column("Target URL")
+    tbl.add_column("Title", style="dim")
+    tbl.add_column("Tags", style="yellow")
+    tbl.add_column("Visits", justify="right", style="green")
+    for row in rows:
+        tbl.add_row(*row)
+    console.print(tbl)
 
 
-def cmd_create(config: dict, args: argparse.Namespace) -> None:
+@app.command()
+def create(
+    long_url: str = typer.Argument(..., help="Target URL"),
+    slug: str = typer.Option(None, "--slug", "-s", help="Custom short code"),
+    title: str = typer.Option(None, "--title", "-t", help="Title"),
+    tag: list[str] = typer.Option(None, "--tag", help="Tag (repeatable)"),
+):
     """Create a new short URL."""
-    body = {
-        "longUrl": args.long_url,
-        "validateUrl": False,
-    }
-    if args.slug:
-        body["customSlug"] = args.slug
-    if args.title:
-        body["title"] = args.title
-    if args.tag:
-        body["tags"] = args.tag
+    _require_api(_global_config)
+    body = {"longUrl": long_url, "validateUrl": False}
+    if slug:
+        body["customSlug"] = slug
+    if title:
+        body["title"] = title
+    if tag:
+        body["tags"] = tag
 
-    status, data = api(config, "POST", "/short-urls", body=body)
+    status, data = _api(_global_config, "POST", "/short-urls", body=body)
 
     if status in (200, 201):
-        code = data.get("shortCode", "?")
-        short_url = data.get("shortUrl", f"{config['url']}/{code}")
-        print(f"  ✓ {short_url}")
+        short_url = data.get("shortUrl", f"{_global_config['url']}/{data.get('shortCode', '?')}")
+        console.print(f"[green]✓[/green] {short_url}")
     else:
-        detail = data.get("detail", f"HTTP {status}")
-        print(f"  ✗ {detail}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+        raise typer.Exit(1)
 
 
-def cmd_info(config: dict, args: argparse.Namespace) -> None:
+@app.command()
+def info(
+    short_code: str = typer.Argument(..., help="Short code to inspect"),
+):
     """Show details for a short URL."""
-    status, data = api(config, "GET", f"/short-urls/{args.short_code}")
+    _require_api(_global_config)
+    status, data = _api(_global_config, "GET", f"/short-urls/{short_code}")
 
     if status == 404:
-        print(f"  ✗ /{args.short_code} not found", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] /{short_code} not found")
+        raise typer.Exit(1)
     if status != 200:
-        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"  Short Code:  /{data.get('shortCode')}")
-    print(f"  Short URL:   {data.get('shortUrl')}")
-    print(f"  Long URL:    {data.get('longUrl')}")
-    if data.get("title"):
-        print(f"  Title:       {data['title']}")
-    if data.get("tags"):
-        print(f"  Tags:        {', '.join(data['tags'])}")
-    print(f"  Created:     {data.get('dateCreated', '?')}")
-
-    meta = data.get("meta", {})
-    if meta.get("validSince"):
-        print(f"  Valid Since: {meta['validSince']}")
-    if meta.get("validUntil"):
-        print(f"  Valid Until: {meta['validUntil']}")
-    if meta.get("maxVisits"):
-        print(f"  Max Visits:  {meta['maxVisits']}")
+        console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+        raise typer.Exit(1)
 
     visits = data.get("visitsSummary", {})
-    print(f"  Visits:      {visits.get('total', 0)} (bots: {visits.get('bots', 0)})")
-    print(f"  Crawlable:   {data.get('crawlable', False)}")
-    print(f"  Fwd Query:   {data.get('forwardQuery', True)}")
+    meta = data.get("meta", {})
+
+    tbl = Table(box=rbox.SIMPLE, show_header=False, padding=(0, 2))
+    tbl.add_column("Key", style="bold")
+    tbl.add_column("Value")
+
+    tbl.add_row("Short Code", f"/{data.get('shortCode')}")
+    tbl.add_row("Short URL", data.get("shortUrl", ""))
+    tbl.add_row("Target URL", data.get("longUrl", ""))
+    if data.get("title"):
+        tbl.add_row("Title", data["title"])
+    if data.get("tags"):
+        tbl.add_row("Tags", ", ".join(data["tags"]))
+    tbl.add_row("Created", data.get("dateCreated", "?")[:19])
+    if meta.get("validSince"):
+        tbl.add_row("Valid Since", meta["validSince"][:19])
+    if meta.get("validUntil"):
+        tbl.add_row("Valid Until", meta["validUntil"][:19])
+    if meta.get("maxVisits"):
+        tbl.add_row("Max Visits", str(meta["maxVisits"]))
+    tbl.add_row("Visits", f"{visits.get('total', 0)} (bots: {visits.get('bots', 0)})")
+    tbl.add_row("Crawlable", str(data.get("crawlable", False)))
+    tbl.add_row("Fwd Query", str(data.get("forwardQuery", True)))
+
+    console.print(Panel(tbl, title=f"/{short_code}", border_style="cyan"))
 
 
-def cmd_update(config: dict, args: argparse.Namespace) -> None:
+@app.command()
+def update(
+    short_code: str = typer.Argument(..., help="Short code to update"),
+    url: str = typer.Option(None, "--url", "-u", help="New target URL"),
+    title: str = typer.Option(None, "--title", "-t", help="New title"),
+    tag: list[str] = typer.Option(None, "--tag", help="Replace tags (repeatable)"),
+):
     """Update an existing short URL."""
+    _require_api(_global_config)
     body = {}
-    if args.url:
-        body["longUrl"] = args.url
-    if args.title:
-        body["title"] = args.title
-    if args.tag:
-        body["tags"] = args.tag
+    if url:
+        body["longUrl"] = url
+    if title:
+        body["title"] = title
+    if tag:
+        body["tags"] = tag
 
     if not body:
-        print("  Nothing to update. Use --url, --title, or --tag.", file=sys.stderr)
-        sys.exit(1)
+        console.print("[red]✗[/red] Nothing to update. Use --url, --title, or --tag.")
+        raise typer.Exit(1)
 
-    status, data = api(config, "PATCH", f"/short-urls/{args.short_code}", body=body)
+    status, data = _api(_global_config, "PATCH", f"/short-urls/{short_code}", body=body)
 
     if status == 200:
-        print(f"  ✓ /{args.short_code} updated")
+        console.print(f"[green]✓[/green] /{short_code} updated")
     elif status == 404:
-        print(f"  ✗ /{args.short_code} not found", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] /{short_code} not found")
+        raise typer.Exit(1)
     else:
-        detail = data.get("detail", f"HTTP {status}")
-        print(f"  ✗ {detail}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+        raise typer.Exit(1)
 
 
-def cmd_delete(config: dict, args: argparse.Namespace) -> None:
+@app.command()
+def delete(
+    short_code: str = typer.Argument(..., help="Short code to delete"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
     """Delete a short URL."""
-    if not args.yes:
-        confirm = input(f"  Delete /{args.short_code}? [y/N] ").strip().lower()
-        if confirm != "y":
-            print("  Cancelled.")
+    _require_api(_global_config)
+    if not yes:
+        confirm = typer.confirm(f"  Delete /{short_code}?", default=False)
+        if not confirm:
+            console.print("  Cancelled.")
             return
 
-    status, data = api(config, "DELETE", f"/short-urls/{args.short_code}")
+    status, data = _api(_global_config, "DELETE", f"/short-urls/{short_code}")
 
     if status == 204:
-        print(f"  ✓ /{args.short_code} deleted")
+        console.print(f"[green]✓[/green] /{short_code} deleted")
     elif status == 404:
-        print(f"  ✗ /{args.short_code} not found", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] /{short_code} not found")
+        raise typer.Exit(1)
     else:
-        detail = data.get("detail", f"HTTP {status}")
-        print(f"  ✗ {detail}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+        raise typer.Exit(1)
 
 
-# ── Visits & Tags ─────────────────────────────────────────────────────────
+# ── Visit Commands ───────────────────────────────────────────────────────
 
 
-def cmd_visits(config: dict, args: argparse.Namespace) -> None:
+@app.command()
+def visits(
+    short_code: str = typer.Argument(..., help="Short code to inspect"),
+    detail: bool = typer.Option(False, "--detail", "-d", help="Show individual visits"),
+    limit: int = typer.Option(20, "--limit", "-l", help="Max visits to show"),
+):
     """Show visit statistics for a short URL."""
-    code = args.short_code
-    status, data = api(config, "GET", f"/short-urls/{code}")
+    _require_api(_global_config)
+    status, data = _api(_global_config, "GET", f"/short-urls/{short_code}")
     if status == 404:
-        print(f"  ✗ /{code} not found", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] /{short_code} not found")
+        raise typer.Exit(1)
     if status != 200:
-        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+        raise typer.Exit(1)
 
     summary = data.get("visitsSummary", {})
-    print(f"  /{code}")
-    print(f"  Total:     {summary.get('total', 0)}")
-    print(f"  Non-bots:  {summary.get('nonBots', 0)}")
-    print(f"  Bots:      {summary.get('bots', 0)}")
+    console.print(f"  [dim]Total:[/dim]     {summary.get('total', 0)}")
+    console.print(f"  [dim]Non-bots:[/dim]  {summary.get('nonBots', 0)}")
+    console.print(f"  [dim]Bots:[/dim]      {summary.get('bots', 0)}")
 
-    if not args.detail:
+    if not detail:
         return
 
     # Fetch individual visits
-    print()
     page = 1
     total_pages = 1
-    count = 0
+    rows = []
+    total_items = 0
     while page <= total_pages:
-        params = {"page": page, "itemsPerPage": 20}
-        vs, vdata = api(config, "GET", f"/short-urls/{code}/visits", params=params)
+        params = {"page": page, "itemsPerPage": limit}
+        vs, vdata = _api(_global_config, "GET", f"/short-urls/{short_code}/visits", params=params)
         if vs != 200:
             break
-        visits = vdata.get("visits", {})
-        items = visits.get("data", [])
-        pagination = visits.get("pagination", {})
+        vobj = vdata.get("visits", {})
+        items = vobj.get("data", [])
+        pagination = vobj.get("pagination", {})
         total_pages = pagination.get("pagesCount", 1)
+        total_items = pagination.get("totalItems", 0)
 
         for v in items:
             date = v.get("date", "?")[:19]
             referer = v.get("referer") or "-"
-            ua = v.get("userAgent") or "-"
-            location = ""
             loc = v.get("visitLocation") or {}
+            location = ""
             if loc.get("cityName"):
                 location = f"{loc['cityName']}, {loc.get('countryName', '')}"
             elif loc.get("countryName"):
                 location = loc["countryName"]
-
-            print(f"  {date}  {referer[:30]:<30s}  {location[:20]:<20s}")
-            count += 1
-            if count >= args.limit:
-                remaining = pagination.get("totalItems", 0) - count
-                if remaining > 0:
-                    print(f"  ... {remaining} more (use --limit to show more)")
-                return
-
+            rows.append((date, referer[:40], location[:25]))
+            if len(rows) >= limit:
+                break
+        if len(rows) >= limit:
+            break
         page += 1
 
+    if rows:
+        suffix = f" (showing {len(rows)}/{total_items})" if total_items > len(rows) else ""
+        tbl = Table(title=f"Visits for /{short_code}{suffix}", box=rbox.SIMPLE_HEAVY, title_style="bold")
+        tbl.add_column("Date", style="dim")
+        tbl.add_column("Referrer")
+        tbl.add_column("Location", style="cyan")
+        for row in rows:
+            tbl.add_row(*row)
+        console.print(tbl)
 
-def cmd_tags(config: dict, args: argparse.Namespace) -> None:
+
+# ── Tag Commands ─────────────────────────────────────────────────────────
+
+
+@tag_app.command("list")
+def tag_list():
     """List all tags with stats."""
-    params = {"itemsPerPage": -1}
-    status, data = api(config, "GET", "/tags/stats", params=params)
+    _require_api(_global_config)
+    status, data = _api(_global_config, "GET", "/tags/stats", params={"itemsPerPage": -1})
     if status != 200:
-        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+        raise typer.Exit(1)
 
     tags = data.get("tags", {}).get("data", [])
     if not tags:
-        print("  No tags found.")
+        console.print("  No tags found.")
         return
 
-    print(f"  {len(tags)} tags\n")
+    tbl = Table(title=f"{len(tags)} Tags", box=rbox.SIMPLE_HEAVY, title_style="bold")
+    tbl.add_column("Tag", style="yellow")
+    tbl.add_column("URLs", justify="right")
+    tbl.add_column("Visits", justify="right", style="green")
     for t in sorted(tags, key=lambda x: x.get("tag", "")):
-        name = t.get("tag", "?")
-        urls = t.get("shortUrlsCount", 0)
-        visits = t.get("visitsSummary", {}).get("total", 0)
-        print(f"  {name:<30s}  {urls:>4d} URLs  {visits:>6d} visits")
+        tbl.add_row(
+            t.get("tag", "?"),
+            str(t.get("shortUrlsCount", 0)),
+            str(t.get("visitsSummary", {}).get("total", 0)),
+        )
+    console.print(tbl)
 
 
-def cmd_tag_rename(config: dict, args: argparse.Namespace) -> None:
+@tag_app.command("rename")
+def tag_rename(
+    old_name: str = typer.Argument(..., help="Current tag name"),
+    new_name: str = typer.Argument(..., help="New tag name"),
+):
     """Rename a tag."""
-    body = {"oldName": args.old_name, "newName": args.new_name}
-    status, data = api(config, "PUT", "/tags", body=body)
+    _require_api(_global_config)
+    body = {"oldName": old_name, "newName": new_name}
+    status, data = _api(_global_config, "PUT", "/tags", body=body)
 
     if status in (200, 204):
-        print(f"  ✓ '{args.old_name}' → '{args.new_name}'")
+        console.print(f"[green]✓[/green] '{old_name}' → '{new_name}'")
     elif status == 404:
-        print(f"  ✗ Tag '{args.old_name}' not found", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] Tag '{old_name}' not found")
+        raise typer.Exit(1)
     else:
-        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+        raise typer.Exit(1)
 
 
-def cmd_tag_delete(config: dict, args: argparse.Namespace) -> None:
+@tag_app.command("delete")
+def tag_delete(
+    tags: list[str] = typer.Argument(..., help="Tag name(s) to delete"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
     """Delete one or more tags."""
-    if not args.yes:
-        names = ", ".join(args.tags)
-        confirm = input(f"  Delete tags [{names}]? [y/N] ").strip().lower()
-        if confirm != "y":
-            print("  Cancelled.")
+    _require_api(_global_config)
+    if not yes:
+        names = ", ".join(tags)
+        confirm = typer.confirm(f"  Delete tags [{names}]?", default=False)
+        if not confirm:
+            console.print("  Cancelled.")
             return
 
-    params = {f"tags[]": args.tags}
-    # DELETE /tags expects tags as query params
-    param_str = "&".join(f"tags[]={urllib.parse.quote(t)}" for t in args.tags)
-    status, data = api(config, "DELETE", f"/tags?{param_str}")
+    param_str = "&".join(f"tags[]={urllib.parse.quote(t)}" for t in tags)
+    status, data = _api(_global_config, "DELETE", f"/tags?{param_str}")
 
     if status in (200, 204):
-        print(f"  ✓ {len(args.tags)} tag(s) deleted")
+        console.print(f"[green]✓[/green] {len(tags)} tag(s) deleted")
     else:
-        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] {data.get('detail', f'HTTP {status}')}")
+        raise typer.Exit(1)
 
 
-def cmd_health(config: dict, args: argparse.Namespace) -> None:
+# ── Server Commands ──────────────────────────────────────────────────────
+
+
+@app.command()
+def health():
     """Check server health status."""
-    parsed = urllib.parse.urlparse(config["url"])
+    if not _global_config["url"]:
+        console.print("[red]✗[/red] Shlink URL is required. Set in .env or pass --server")
+        raise typer.Exit(1)
+
+    parsed = urllib.parse.urlparse(_global_config["url"])
     host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
@@ -450,193 +590,76 @@ def cmd_health(config: dict, args: argparse.Namespace) -> None:
         conn.close()
 
         data = json.loads(raw) if raw.strip() else {}
-        health = data.get("status", "unknown")
+        health_status = data.get("status", "unknown")
         version = data.get("version", "?")
-        links = data.get("links", {})
 
-        if status == 200 and health == "pass":
-            print(f"  ✓ Healthy")
-            print(f"  Version: {version}")
-            if links.get("about"):
-                print(f"  About:   {links['about']}")
+        if status == 200 and health_status == "pass":
+            console.print(f"[green]✓[/green] Healthy")
+            console.print(f"  [dim]Version:[/dim] {version}")
         else:
-            print(f"  ✗ Unhealthy (status: {health})", file=sys.stderr)
-            sys.exit(1)
+            console.print(f"[red]✗[/red] Unhealthy (status: {health_status})")
+            raise typer.Exit(1)
 
+    except typer.Exit:
+        raise
     except Exception as e:
-        print(f"  ✗ Unreachable: {e}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]✗[/red] Unreachable: {e}")
+        raise typer.Exit(1)
 
 
 # ── API Key Commands (docker exec) ────────────────────────────────────────
 
 
-def cmd_keys(config: dict, args: argparse.Namespace) -> None:
+@key_app.command("list")
+def key_list():
     """List all API keys."""
-    rc, output = _docker_exec(config["container"], "shlink", "api-key:list")
+    container = _find_container(_global_config.get("container"))
+    rc, output = _docker_exec(container, "shlink", "api-key:list")
     if rc != 0:
-        print(f"  ✗ {output}", file=sys.stderr)
-        sys.exit(1)
-    print(output)
+        console.print(f"[red]✗[/red] {output}")
+        raise typer.Exit(1)
+    console.print(output)
 
 
-def cmd_key_add(config: dict, args: argparse.Namespace) -> None:
+@key_app.command("add")
+def key_add(
+    name: str = typer.Option(None, "--name", "-n", help="Human-readable name"),
+    expiration: str = typer.Option(None, "--expiration", "-e", help="Expiration date (YYYY-MM-DD)"),
+):
     """Generate a new API key."""
     cmd = ["shlink", "api-key:generate"]
-    if args.name:
-        cmd.extend(["--name", args.name])
-    if args.expiration:
-        cmd.extend(["--expiration-date", args.expiration])
+    if name:
+        cmd.extend(["--name", name])
+    if expiration:
+        cmd.extend(["--expiration-date", expiration])
 
-    rc, output = _docker_exec(config["container"], *cmd)
+    container = _find_container(_global_config.get("container"))
+    rc, output = _docker_exec(container, *cmd)
     if rc != 0:
-        print(f"  ✗ {output}", file=sys.stderr)
-        sys.exit(1)
-    print(f"  ✓ {output}")
+        console.print(f"[red]✗[/red] {output}")
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/green] {output}")
 
 
-def cmd_key_disable(config: dict, args: argparse.Namespace) -> None:
+@key_app.command("disable")
+def key_disable(
+    api_key: str = typer.Argument(..., help="API key to disable"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
     """Disable an API key."""
-    if not args.yes:
-        confirm = input(f"  Disable API key {args.api_key[:8]}...? [y/N] ").strip().lower()
-        if confirm != "y":
-            print("  Cancelled.")
+    if not yes:
+        confirm = typer.confirm(f"  Disable API key {api_key[:8]}...?", default=False)
+        if not confirm:
+            console.print("  Cancelled.")
             return
 
-    rc, output = _docker_exec(config["container"], "shlink", "api-key:disable", args.api_key)
+    container = _find_container(_global_config.get("container"))
+    rc, output = _docker_exec(container, "shlink", "api-key:disable", api_key)
     if rc != 0:
-        print(f"  ✗ {output}", file=sys.stderr)
-        sys.exit(1)
-    print(f"  ✓ API key disabled")
-
-
-# ── CLI ───────────────────────────────────────────────────────────────────
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Manage Shlink short URLs, tags, visits, and API keys.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python scripts/shlink-cli.py list
-  python scripts/shlink-cli.py list --tag yourls
-  python scripts/shlink-cli.py create https://example.com --slug test --tag marketing
-  python scripts/shlink-cli.py info test
-  python scripts/shlink-cli.py update test --url https://new.example.com --title "New Title"
-  python scripts/shlink-cli.py delete test --yes
-  python scripts/shlink-cli.py visits test --detail --limit 50
-  python scripts/shlink-cli.py tags
-  python scripts/shlink-cli.py tag-rename oldname newname
-  python scripts/shlink-cli.py tag-delete obsolete-tag --yes
-  python scripts/shlink-cli.py health
-  python scripts/shlink-cli.py keys
-  python scripts/shlink-cli.py key-add --name "Marketing Team"
-  python scripts/shlink-cli.py key-disable e2336c75-ac55-4f07-bf75-e98e6c29ef6e
-        """,
-    )
-
-    parser.add_argument("--server", help="Shlink server URL (auto-detected from .env)")
-    parser.add_argument("--key", help="Shlink API key (auto-detected from .env)")
-    parser.add_argument("--container", help="Docker container name (auto-detected from .env)")
-
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    # list
-    ls = sub.add_parser("list", help="List all short URLs")
-    ls.add_argument("--tag", help="Filter by tag")
-
-    # create
-    cr = sub.add_parser("create", help="Create a short URL")
-    cr.add_argument("long_url", help="Target URL")
-    cr.add_argument("--slug", "-s", help="Custom short code")
-    cr.add_argument("--title", "-t", help="Title")
-    cr.add_argument("--tag", action="append", help="Tag (repeatable)")
-
-    # info
-    inf = sub.add_parser("info", help="Show short URL details")
-    inf.add_argument("short_code", help="Short code to inspect")
-
-    # update
-    up = sub.add_parser("update", help="Update a short URL")
-    up.add_argument("short_code", help="Short code to update")
-    up.add_argument("--url", "-u", help="New target URL")
-    up.add_argument("--title", "-t", help="New title")
-    up.add_argument("--tag", action="append", help="Replace tags (repeatable)")
-
-    # delete
-    dl = sub.add_parser("delete", help="Delete a short URL")
-    dl.add_argument("short_code", help="Short code to delete")
-    dl.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
-
-    # visits
-    vi = sub.add_parser("visits", help="Show visit statistics for a short URL")
-    vi.add_argument("short_code", help="Short code to inspect")
-    vi.add_argument("--detail", "-d", action="store_true", help="Show individual visits")
-    vi.add_argument("--limit", "-l", type=int, default=20, help="Max visits to show (default: 20)")
-
-    # tags
-    sub.add_parser("tags", help="List all tags with stats")
-
-    tr = sub.add_parser("tag-rename", help="Rename a tag")
-    tr.add_argument("old_name", help="Current tag name")
-    tr.add_argument("new_name", help="New tag name")
-
-    td = sub.add_parser("tag-delete", help="Delete tags")
-    td.add_argument("tags", nargs="+", help="Tag name(s) to delete")
-    td.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
-
-    # health
-    sub.add_parser("health", help="Check server health status")
-
-    # keys (API key management via docker exec)
-    sub.add_parser("keys", help="List all API keys")
-
-    ka = sub.add_parser("key-add", help="Generate a new API key")
-    ka.add_argument("--name", "-n", help="Human-readable name")
-    ka.add_argument("--expiration", "-e", help="Expiration date (YYYY-MM-DD)")
-
-    kd = sub.add_parser("key-disable", help="Disable an API key")
-    kd.add_argument("api_key", help="API key to disable")
-    kd.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
-
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    config = load_config(args)
-
-    # API key commands only need docker access, not REST API credentials
-    key_commands = {
-        "keys": cmd_keys,
-        "key-add": cmd_key_add,
-        "key-disable": cmd_key_disable,
-    }
-
-    if args.command in key_commands:
-        key_commands[args.command](config, args)
-        return
-
-    if not config["url"] or not config["key"]:
-        print("✗ Shlink URL and API key are required.", file=sys.stderr)
-        print("  Set in .env or pass --server and --key", file=sys.stderr)
-        sys.exit(1)
-
-    commands = {
-        "list": cmd_list,
-        "create": cmd_create,
-        "info": cmd_info,
-        "update": cmd_update,
-        "delete": cmd_delete,
-        "visits": cmd_visits,
-        "tags": cmd_tags,
-        "tag-rename": cmd_tag_rename,
-        "tag-delete": cmd_tag_delete,
-        "health": cmd_health,
-    }
-    commands[args.command](config, args)
+        console.print(f"[red]✗[/red] {output}")
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/green] API key disabled")
 
 
 if __name__ == "__main__":
-    main()
+    app()
