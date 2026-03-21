@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.1.2...v1.2.0) (2026-03-21)
+
+### 🚀 Features
+
+* **cli:** added API key management commands ([9e745b0](https://github.com/bauer-group/CS-URLShortener/commit/9e745b0e8904718a34ad183678be219b05011305))
+
 ## [1.1.2](https://github.com/bauer-group/CS-URLShortener/compare/v1.1.1...v1.1.2) (2026-03-21)
 
 ### 🐛 Bug Fixes
