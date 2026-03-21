@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 # =============================================================================
-# shlink-cli.py — Manage Shlink short URLs from the command line
+# shlink-cli.py — Manage Shlink from the command line
 # =============================================================================
-# Simple CLI for creating, listing, updating, and deleting short URLs
-# via the Shlink REST API. API key management via docker exec.
+# CLI for managing short URLs, tags, visits, and API keys via the Shlink
+# REST API. API key management uses docker exec (keys are not in the API).
 #
 # Usage:
 #   python scripts/shlink-cli.py list [--tag TAG]
-#   python scripts/shlink-cli.py create <long-url> [--slug SLUG] [--tag TAG] [--title TITLE]
+#   python scripts/shlink-cli.py create <long-url> [--slug SLUG] [--tag TAG]
 #   python scripts/shlink-cli.py info <short-code>
-#   python scripts/shlink-cli.py update <short-code> [--url URL] [--title TITLE] [--tag TAG]
+#   python scripts/shlink-cli.py update <short-code> [--url URL] [--title TITLE]
 #   python scripts/shlink-cli.py delete <short-code> [--yes]
+#   python scripts/shlink-cli.py visits <short-code> [--detail]
+#   python scripts/shlink-cli.py tags
+#   python scripts/shlink-cli.py tag-rename <old> <new>
+#   python scripts/shlink-cli.py tag-delete <tag> [--yes]
+#   python scripts/shlink-cli.py health
 #   python scripts/shlink-cli.py keys
 #   python scripts/shlink-cli.py key-add [--name NAME] [--expiration DATE]
 #   python scripts/shlink-cli.py key-disable <api-key> [--yes]
 #
 # Configuration is auto-detected from .env file.
-# Override with --server and --key options.
+# Override with --server, --key, and --container options.
 #
 # Requirements: Python 3.6+ (no external dependencies)
 # =============================================================================
@@ -308,6 +313,161 @@ def cmd_delete(config: dict, args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+# ── Visits & Tags ─────────────────────────────────────────────────────────
+
+
+def cmd_visits(config: dict, args: argparse.Namespace) -> None:
+    """Show visit statistics for a short URL."""
+    code = args.short_code
+    status, data = api(config, "GET", f"/short-urls/{code}")
+    if status == 404:
+        print(f"  ✗ /{code} not found", file=sys.stderr)
+        sys.exit(1)
+    if status != 200:
+        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
+        sys.exit(1)
+
+    summary = data.get("visitsSummary", {})
+    print(f"  /{code}")
+    print(f"  Total:     {summary.get('total', 0)}")
+    print(f"  Non-bots:  {summary.get('nonBots', 0)}")
+    print(f"  Bots:      {summary.get('bots', 0)}")
+
+    if not args.detail:
+        return
+
+    # Fetch individual visits
+    print()
+    page = 1
+    total_pages = 1
+    count = 0
+    while page <= total_pages:
+        params = {"page": page, "itemsPerPage": 20}
+        vs, vdata = api(config, "GET", f"/short-urls/{code}/visits", params=params)
+        if vs != 200:
+            break
+        visits = vdata.get("visits", {})
+        items = visits.get("data", [])
+        pagination = visits.get("pagination", {})
+        total_pages = pagination.get("pagesCount", 1)
+
+        for v in items:
+            date = v.get("date", "?")[:19]
+            referer = v.get("referer") or "-"
+            ua = v.get("userAgent") or "-"
+            location = ""
+            loc = v.get("visitLocation") or {}
+            if loc.get("cityName"):
+                location = f"{loc['cityName']}, {loc.get('countryName', '')}"
+            elif loc.get("countryName"):
+                location = loc["countryName"]
+
+            print(f"  {date}  {referer[:30]:<30s}  {location[:20]:<20s}")
+            count += 1
+            if count >= args.limit:
+                remaining = pagination.get("totalItems", 0) - count
+                if remaining > 0:
+                    print(f"  ... {remaining} more (use --limit to show more)")
+                return
+
+        page += 1
+
+
+def cmd_tags(config: dict, args: argparse.Namespace) -> None:
+    """List all tags with stats."""
+    params = {"itemsPerPage": -1}
+    status, data = api(config, "GET", "/tags/stats", params=params)
+    if status != 200:
+        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
+        sys.exit(1)
+
+    tags = data.get("tags", {}).get("data", [])
+    if not tags:
+        print("  No tags found.")
+        return
+
+    print(f"  {len(tags)} tags\n")
+    for t in sorted(tags, key=lambda x: x.get("tag", "")):
+        name = t.get("tag", "?")
+        urls = t.get("shortUrlsCount", 0)
+        visits = t.get("visitsSummary", {}).get("total", 0)
+        print(f"  {name:<30s}  {urls:>4d} URLs  {visits:>6d} visits")
+
+
+def cmd_tag_rename(config: dict, args: argparse.Namespace) -> None:
+    """Rename a tag."""
+    body = {"oldName": args.old_name, "newName": args.new_name}
+    status, data = api(config, "PUT", "/tags", body=body)
+
+    if status in (200, 204):
+        print(f"  ✓ '{args.old_name}' → '{args.new_name}'")
+    elif status == 404:
+        print(f"  ✗ Tag '{args.old_name}' not found", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_tag_delete(config: dict, args: argparse.Namespace) -> None:
+    """Delete one or more tags."""
+    if not args.yes:
+        names = ", ".join(args.tags)
+        confirm = input(f"  Delete tags [{names}]? [y/N] ").strip().lower()
+        if confirm != "y":
+            print("  Cancelled.")
+            return
+
+    params = {f"tags[]": args.tags}
+    # DELETE /tags expects tags as query params
+    param_str = "&".join(f"tags[]={urllib.parse.quote(t)}" for t in args.tags)
+    status, data = api(config, "DELETE", f"/tags?{param_str}")
+
+    if status in (200, 204):
+        print(f"  ✓ {len(args.tags)} tag(s) deleted")
+    else:
+        print(f"  ✗ {data.get('detail', f'HTTP {status}')}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_health(config: dict, args: argparse.Namespace) -> None:
+    """Check server health status."""
+    parsed = urllib.parse.urlparse(config["url"])
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    try:
+        if parsed.scheme == "https":
+            conn = http.client.HTTPSConnection(host, port, timeout=5,
+                                               context=ssl.create_default_context())
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=5)
+
+        conn.request("GET", "/rest/health", headers={"Connection": "close"})
+        resp = conn.getresponse()
+        raw = resp.read().decode("utf-8", errors="replace")
+        status = resp.status
+        conn.close()
+
+        data = json.loads(raw) if raw.strip() else {}
+        health = data.get("status", "unknown")
+        version = data.get("version", "?")
+        links = data.get("links", {})
+
+        if status == 200 and health == "pass":
+            print(f"  ✓ Healthy")
+            print(f"  Version: {version}")
+            if links.get("about"):
+                print(f"  About:   {links['about']}")
+        else:
+            print(f"  ✗ Unhealthy (status: {health})", file=sys.stderr)
+            sys.exit(1)
+
+    except Exception as e:
+        print(f"  ✗ Unreachable: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 # ── API Key Commands (docker exec) ────────────────────────────────────────
 
 
@@ -355,7 +515,7 @@ def cmd_key_disable(config: dict, args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Manage Shlink short URLs.",
+        description="Manage Shlink short URLs, tags, visits, and API keys.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -365,6 +525,11 @@ Examples:
   python scripts/shlink-cli.py info test
   python scripts/shlink-cli.py update test --url https://new.example.com --title "New Title"
   python scripts/shlink-cli.py delete test --yes
+  python scripts/shlink-cli.py visits test --detail --limit 50
+  python scripts/shlink-cli.py tags
+  python scripts/shlink-cli.py tag-rename oldname newname
+  python scripts/shlink-cli.py tag-delete obsolete-tag --yes
+  python scripts/shlink-cli.py health
   python scripts/shlink-cli.py keys
   python scripts/shlink-cli.py key-add --name "Marketing Team"
   python scripts/shlink-cli.py key-disable e2336c75-ac55-4f07-bf75-e98e6c29ef6e
@@ -403,6 +568,26 @@ Examples:
     dl = sub.add_parser("delete", help="Delete a short URL")
     dl.add_argument("short_code", help="Short code to delete")
     dl.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+
+    # visits
+    vi = sub.add_parser("visits", help="Show visit statistics for a short URL")
+    vi.add_argument("short_code", help="Short code to inspect")
+    vi.add_argument("--detail", "-d", action="store_true", help="Show individual visits")
+    vi.add_argument("--limit", "-l", type=int, default=20, help="Max visits to show (default: 20)")
+
+    # tags
+    sub.add_parser("tags", help="List all tags with stats")
+
+    tr = sub.add_parser("tag-rename", help="Rename a tag")
+    tr.add_argument("old_name", help="Current tag name")
+    tr.add_argument("new_name", help="New tag name")
+
+    td = sub.add_parser("tag-delete", help="Delete tags")
+    td.add_argument("tags", nargs="+", help="Tag name(s) to delete")
+    td.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+
+    # health
+    sub.add_parser("health", help="Check server health status")
 
     # keys (API key management via docker exec)
     sub.add_parser("keys", help="List all API keys")
@@ -444,6 +629,11 @@ def main() -> None:
         "info": cmd_info,
         "update": cmd_update,
         "delete": cmd_delete,
+        "visits": cmd_visits,
+        "tags": cmd_tags,
+        "tag-rename": cmd_tag_rename,
+        "tag-delete": cmd_tag_delete,
+        "health": cmd_health,
     }
     commands[args.command](config, args)
 
