@@ -1,3 +1,13 @@
+## [1.4.1](https://github.com/bauer-group/CS-URLShortener/compare/v1.4.0...v1.4.1) (2026-03-21)
+
+### ⚡ Performance
+
+* **config:** increased default web worker count to 8 ([da9d3e5](https://github.com/bauer-group/CS-URLShortener/commit/da9d3e5570c0ad22c069179c76ac2e7ed4268c35))
+
+### ♻️ Refactoring
+
+* **cli:** migrated to typer and rich for enhanced CLI experience ([c29e194](https://github.com/bauer-group/CS-URLShortener/commit/c29e194146890bf84c3e8a49a331d34bfdc6c2b9))
+
 ## [1.4.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.3.0...v1.4.0) (2026-03-21)
 
 ### 🚀 Features
