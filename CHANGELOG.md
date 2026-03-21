@@ -1,3 +1,13 @@
+## [2.0.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.4.1...v2.0.0) (2026-03-21)
+
+### ⚠ BREAKING CHANGES
+
+* **roadrunner:** RoadRunner server is no longer configured or used.
+
+### 🔧 Chores
+
+* **roadrunner:** removed RoadRunner configuration ([178fbe6](https://github.com/bauer-group/CS-URLShortener/commit/178fbe6b628c4ed0ded2037214b20683c871274d))
+
 ## [1.4.1](https://github.com/bauer-group/CS-URLShortener/compare/v1.4.0...v1.4.1) (2026-03-21)
 
 ### ⚡ Performance
