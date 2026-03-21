@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.2.0...v1.3.0) (2026-03-21)
+
+### 🚀 Features
+
+* **shlink-backup:** expand backup scope with redirect rules and domains ([a5af0c7](https://github.com/bauer-group/CS-URLShortener/commit/a5af0c766a19f00f2ccf3f6f4c0e35f552bc95cf))
+
 ## [1.2.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.1.2...v1.2.0) (2026-03-21)
 
 ### 🚀 Features
