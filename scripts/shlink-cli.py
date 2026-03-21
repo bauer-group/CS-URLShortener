@@ -3,7 +3,7 @@
 # shlink-cli.py — Manage Shlink short URLs from the command line
 # =============================================================================
 # Simple CLI for creating, listing, updating, and deleting short URLs
-# via the Shlink REST API.
+# via the Shlink REST API. API key management via docker exec.
 #
 # Usage:
 #   python scripts/shlink-cli.py list [--tag TAG]
@@ -11,6 +11,9 @@
 #   python scripts/shlink-cli.py info <short-code>
 #   python scripts/shlink-cli.py update <short-code> [--url URL] [--title TITLE] [--tag TAG]
 #   python scripts/shlink-cli.py delete <short-code> [--yes]
+#   python scripts/shlink-cli.py keys
+#   python scripts/shlink-cli.py key-add [--name NAME] [--expiration DATE]
+#   python scripts/shlink-cli.py key-disable <api-key> [--yes]
 #
 # Configuration is auto-detected from .env file.
 # Override with --server and --key options.
@@ -22,6 +25,7 @@ import argparse
 import http.client
 import json
 import ssl
+import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
@@ -45,10 +49,11 @@ def _parse_env_file(path: Path) -> dict:
 
 def load_config(args: argparse.Namespace) -> dict:
     """Build configuration from CLI args and .env file."""
-    config = {"url": getattr(args, "server", None), "key": getattr(args, "key", None)}
-
-    if config["url"] and config["key"]:
-        return config
+    config = {
+        "url": getattr(args, "server", None),
+        "key": getattr(args, "key", None),
+        "container": getattr(args, "container", None),
+    }
 
     env_path = Path(__file__).resolve().parent.parent / ".env"
     if not env_path.exists():
@@ -64,6 +69,10 @@ def load_config(args: argparse.Namespace) -> dict:
 
     if not config["key"]:
         config["key"] = env.get("SHLINK_API_KEY", "")
+
+    if not config["container"]:
+        stack = env.get("STACK_NAME", "url-shortener")
+        config["container"] = f"{stack}_SERVER"
 
     return config
 
@@ -113,6 +122,28 @@ def api(config: dict, method: str, path: str, body: dict = None, params: dict = 
 
     except Exception as e:
         print(f"  Connection error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ── Docker Exec ───────────────────────────────────────────────────────────
+
+
+def _docker_exec(container: str, *cmd: str) -> tuple:
+    """Run a command inside the Shlink container via docker exec."""
+    try:
+        result = subprocess.run(
+            ["docker", "exec", container, *cmd],
+            capture_output=True, text=True, timeout=30,
+        )
+        output = result.stdout.strip()
+        if result.returncode != 0:
+            output = result.stderr.strip() or output
+        return result.returncode, output
+    except FileNotFoundError:
+        print("  ✗ docker not found. Run this from the Docker host.", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("  ✗ Command timed out.", file=sys.stderr)
         sys.exit(1)
 
 
@@ -277,6 +308,48 @@ def cmd_delete(config: dict, args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+# ── API Key Commands (docker exec) ────────────────────────────────────────
+
+
+def cmd_keys(config: dict, args: argparse.Namespace) -> None:
+    """List all API keys."""
+    rc, output = _docker_exec(config["container"], "shlink", "api-key:list")
+    if rc != 0:
+        print(f"  ✗ {output}", file=sys.stderr)
+        sys.exit(1)
+    print(output)
+
+
+def cmd_key_add(config: dict, args: argparse.Namespace) -> None:
+    """Generate a new API key."""
+    cmd = ["shlink", "api-key:generate"]
+    if args.name:
+        cmd.extend(["--name", args.name])
+    if args.expiration:
+        cmd.extend(["--expiration-date", args.expiration])
+
+    rc, output = _docker_exec(config["container"], *cmd)
+    if rc != 0:
+        print(f"  ✗ {output}", file=sys.stderr)
+        sys.exit(1)
+    print(f"  ✓ {output}")
+
+
+def cmd_key_disable(config: dict, args: argparse.Namespace) -> None:
+    """Disable an API key."""
+    if not args.yes:
+        confirm = input(f"  Disable API key {args.api_key[:8]}...? [y/N] ").strip().lower()
+        if confirm != "y":
+            print("  Cancelled.")
+            return
+
+    rc, output = _docker_exec(config["container"], "shlink", "api-key:disable", args.api_key)
+    if rc != 0:
+        print(f"  ✗ {output}", file=sys.stderr)
+        sys.exit(1)
+    print(f"  ✓ API key disabled")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 
@@ -292,11 +365,15 @@ Examples:
   python scripts/shlink-cli.py info test
   python scripts/shlink-cli.py update test --url https://new.example.com --title "New Title"
   python scripts/shlink-cli.py delete test --yes
+  python scripts/shlink-cli.py keys
+  python scripts/shlink-cli.py key-add --name "Marketing Team"
+  python scripts/shlink-cli.py key-disable e2336c75-ac55-4f07-bf75-e98e6c29ef6e
         """,
     )
 
     parser.add_argument("--server", help="Shlink server URL (auto-detected from .env)")
     parser.add_argument("--key", help="Shlink API key (auto-detected from .env)")
+    parser.add_argument("--container", help="Docker container name (auto-detected from .env)")
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -327,12 +404,34 @@ Examples:
     dl.add_argument("short_code", help="Short code to delete")
     dl.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
 
+    # keys (API key management via docker exec)
+    sub.add_parser("keys", help="List all API keys")
+
+    ka = sub.add_parser("key-add", help="Generate a new API key")
+    ka.add_argument("--name", "-n", help="Human-readable name")
+    ka.add_argument("--expiration", "-e", help="Expiration date (YYYY-MM-DD)")
+
+    kd = sub.add_parser("key-disable", help="Disable an API key")
+    kd.add_argument("api_key", help="API key to disable")
+    kd.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     config = load_config(args)
+
+    # API key commands only need docker access, not REST API credentials
+    key_commands = {
+        "keys": cmd_keys,
+        "key-add": cmd_key_add,
+        "key-disable": cmd_key_disable,
+    }
+
+    if args.command in key_commands:
+        key_commands[args.command](config, args)
+        return
 
     if not config["url"] or not config["key"]:
         print("✗ Shlink URL and API key are required.", file=sys.stderr)
