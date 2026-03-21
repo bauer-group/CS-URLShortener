@@ -1,3 +1,9 @@
+## [1.4.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.3.0...v1.4.0) (2026-03-21)
+
+### 🚀 Features
+
+* **shlink-cli:** added visits and tags management commands ([8efb9aa](https://github.com/bauer-group/CS-URLShortener/commit/8efb9aab8354e19869f04fecf25a20c7b3a561d9))
+
 ## [1.3.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.2.0...v1.3.0) (2026-03-21)
 
 ### 🚀 Features
