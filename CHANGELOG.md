@@ -1,3 +1,10 @@
+## [2.1.0](https://github.com/bauer-group/CS-URLShortener/compare/v2.0.0...v2.1.0) (2026-05-18)
+
+### 🚀 Features
+
+* **ci:** added Docker release pipeline with base image monitoring ([6bf1c1b](https://github.com/bauer-group/CS-URLShortener/commit/6bf1c1bc221e2312131300ac86f0ef599363c4b2))
+* **docker:** added urlshortener-web image and restructured src/ to app/ ([ba0f91e](https://github.com/bauer-group/CS-URLShortener/commit/ba0f91ecac7e660b6d97371549280b59d95734c9))
+
 ## [2.0.0](https://github.com/bauer-group/CS-URLShortener/compare/v1.4.1...v2.0.0) (2026-03-21)
 
 ### ⚠ BREAKING CHANGES
