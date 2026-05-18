@@ -34,3 +34,8 @@ __pycache__/
 *.temp
 *.bak
 *~
+
+# Backups
+shlink-backup*.json.gz
+shlink-backup*.json
+
