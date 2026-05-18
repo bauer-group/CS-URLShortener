@@ -35,7 +35,7 @@ services:
   # ── Shlink Server (URL Shortener Engine) ───────────────────────────────────
   shlink-server:
     <<: *shlink-common
-    # image: shlinkio/shlink:${SHLINK_VERSION:-stable}
+    # image: ghcr.io/bauer-group/cs-urlshortener/urlshortener:${SHLINK_IMAGE_TAG:-stable}
     build:
       context: ./src
       dockerfile: Dockerfile

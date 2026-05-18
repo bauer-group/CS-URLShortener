@@ -1,13 +1,19 @@
 # =============================================================================
 # Dependabot Configuration
 # =============================================================================
-# Monitors Docker base images for updates
-# Combined with docker-maintenance.yml workflow for auto-merge and release
+# Watches:
+#   1. GitHub Actions versions (workflows pinned to @main pull module updates)
+#   2. Image references inside docker-compose*.yml files
+#   3. Base image reference inside src/Dockerfile (shlinkio/shlink)
+#
+# Image-tag updates that bump from a floating tag to a new floating tag
+# (e.g. shlinkio/shlink:4 → shlinkio/shlink:5) surface here as PRs. Pure digest
+# drift on existing tags is handled by check-base-images.yml (daily cron).
 # =============================================================================
 
 version: 2
 updates:
-  # GitHub Actions updates
+  # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -22,9 +28,24 @@ updates:
     commit-message:
       prefix: "chore(ci)"
 
-  # Docker image updates
+  # Docker Compose images (Dependabot >= 2024-09 supports docker-compose ecosystem)
   - package-ecosystem: "docker-compose"
     directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "dependabot"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # shlink base image (shlinkio/shlink in src/Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/src"
     schedule:
       interval: "weekly"
       day: "sunday"

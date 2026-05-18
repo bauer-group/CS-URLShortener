@@ -1,0 +1,114 @@
+name: 🚀 Release & Docker Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/**'
+      - '*.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+  workflow_dispatch:
+    inputs:
+      force-release:
+        description: 'force create release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write
+  security-events: write
+
+jobs:
+  # ============================================
+  # Validation Jobs
+  # ============================================
+
+  validate-compose:
+    name: 🔍 Validate Docker Compose
+    uses: bauer-group/automation-templates/.github/workflows/modules-validate-compose.yml@main
+    with:
+      compose-files: '["docker-compose.coolify.yml", "docker-compose.traefik.yml", "docker-compose.development.yml"]'
+      env-file: '.env.example'
+      validate-services: '["shlink-server", "shlink-web", "shlink-db"]'
+
+  # ============================================
+  # Release Job (only on main branch push)
+  # ============================================
+
+  release:
+    name: 📦 Create Semantic Release
+    needs: [validate-compose]
+    if: |
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.validate-compose.result == 'success'
+    uses: bauer-group/automation-templates/.github/workflows/modules-semantic-release.yml@main
+    with:
+      target-branch: 'main'
+      dry-run: false
+      force-release: ${{ inputs.force-release || false }}
+    secrets: inherit
+
+  # ============================================
+  # Docker Build & Push (shlink image)
+  # ============================================
+
+  docker-build-urlshortener-release:
+    name: 🐳 Build & Push urlshortener
+    needs: release
+    if: needs.release.outputs.release-created == 'true'
+    uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
+    with:
+      deploy-environment: 'production'
+      publish-to: 'ghcr'
+      ghcr-image-name: 'bauer-group/CS-URLShortener/urlshortener'
+      docker-image-name: 'bauergroup/cs-urlshortener'
+
+      release-version: ${{ needs.release.outputs.version }}
+      image-tags: 'stable'
+
+      update-dockerfile-version: true
+      auto-tags: true
+      latest-tag: true
+
+      dockerfile-path: './src/Dockerfile'
+      docker-context: './src'
+      platforms: 'linux/amd64'
+
+      push: true
+
+      security-scan: false
+      security-fail-on: 'CRITICAL'
+      generate-sbom: true
+      sync-dockerhub-readme: true
+    secrets: inherit
+
+  docker-build-urlshortener-pr:
+    name: 🔨 Validate urlshortener Build (PR)
+    needs: [validate-compose]
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.validate-compose.result == 'success'
+    uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
+    with:
+      publish-to: 'ghcr'
+      ghcr-image-name: 'bauer-group/CS-URLShortener/urlshortener'
+
+      auto-tags: true
+      dockerfile-path: './src/Dockerfile'
+      docker-context: './src'
+      platforms: 'linux/amd64'
+
+      push: false
+
+      security-scan: false
+      security-fail-on: 'CRITICAL'
+    secrets: inherit
