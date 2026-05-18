@@ -4,7 +4,8 @@
 # Watches:
 #   1. GitHub Actions versions (workflows pinned to @main pull module updates)
 #   2. Image references inside docker-compose*.yml files
-#   3. Base image reference inside src/Dockerfile (shlinkio/shlink)
+#   3. Base image references inside app/shlink/Dockerfile and
+#      app/shlink-web/Dockerfile (shlinkio/shlink, shlinkio/shlink-web-client)
 #
 # Image-tag updates that bump from a floating tag to a new floating tag
 # (e.g. shlinkio/shlink:4 → shlinkio/shlink:5) surface here as PRs. Pure digest
@@ -43,9 +44,24 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  # shlink base image (shlinkio/shlink in src/Dockerfile)
+  # shlink server base image (shlinkio/shlink in app/shlink/Dockerfile)
   - package-ecosystem: "docker"
-    directory: "/src"
+    directory: "/app/shlink"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "06:30"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "dependabot"
+    commit-message:
+      prefix: "chore(docker)"
+
+  # shlink web client base image (shlinkio/shlink-web-client in app/shlink-web/Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/app/shlink-web"
     schedule:
       interval: "weekly"
       day: "sunday"

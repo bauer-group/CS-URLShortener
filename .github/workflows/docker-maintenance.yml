@@ -1,10 +1,10 @@
 # =============================================================================
-# Docker Maintenance — Auto-merge Dependabot PRs (shlink Dockerfile)
+# Docker Maintenance — Auto-merge Dependabot PRs (Shlink Dockerfiles)
 # =============================================================================
-# When Dependabot opens a PR bumping the shlinkio/shlink base image inside
-# src/Dockerfile, this workflow auto-approves and merges it (after validation
-# passes), which then triggers docker-release.yml to build and push the
-# updated image.
+# When Dependabot opens a PR bumping a base image inside any of our
+# Dockerfiles (app/shlink/Dockerfile or app/shlink-web/Dockerfile), this
+# workflow auto-approves and merges it (after validation passes), which
+# then triggers docker-release.yml to build and push the updated image.
 # =============================================================================
 
 name: 🔧 Docker Maintenance
@@ -13,7 +13,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'src/Dockerfile'
+      - 'app/shlink/Dockerfile'
+      - 'app/shlink-web/Dockerfile'
 
 permissions:
   contents: write

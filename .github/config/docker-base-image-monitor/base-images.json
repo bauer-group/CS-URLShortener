@@ -1,27 +1,27 @@
 {
   "$schema": "https://raw.githubusercontent.com/bauer-group/automation-templates/main/.github/config/docker-base-image-monitor/docker-base-images.schema.json",
-  "_description": "URLShortener stack — upstream images consumed via docker-compose and src/Dockerfile. The monitor tracks digests and triggers a release when an upstream image moves.",
+  "_description": "URLShortener stack — upstream images repackaged via app/shlink/Dockerfile and app/shlink-web/Dockerfile, plus the Postgres image consumed directly via docker-compose. The monitor tracks digests and triggers a release when an upstream image moves.",
   "images": [
     {
       "name": "shlink",
       "image": "shlinkio/shlink",
       "tag": "stable",
       "variable": "SHLINK_STABLE_DIGEST",
-      "description": "Shlink URL shortener — base image for src/Dockerfile (BAUER GROUP build)"
+      "description": "Shlink URL shortener — base image for app/shlink/Dockerfile (urlshortener-server build)"
     },
     {
       "name": "shlink-web-client",
       "image": "shlinkio/shlink-web-client",
       "tag": "stable",
       "variable": "SHLINK_WEB_STABLE_DIGEST",
-      "description": "Shlink admin web client (consumed directly via docker-compose)"
+      "description": "Shlink admin web client — base image for app/shlink-web/Dockerfile (urlshortener-web build)"
     },
     {
       "name": "postgres",
       "image": "postgres",
       "tag": "18",
       "variable": "POSTGRES_18_DIGEST",
-      "description": "PostgreSQL 18 — primary database for Shlink"
+      "description": "PostgreSQL 18 — primary database for Shlink (consumed directly via docker-compose)"
     }
   ],
   "settings": {

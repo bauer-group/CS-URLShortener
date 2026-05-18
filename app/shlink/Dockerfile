@@ -1,5 +1,5 @@
 # =============================================================================
-# URLShortener — Custom Shlink Build
+# URLShortener — Shlink Server (BAUER GROUP Build)
 # Extended with RoadRunner supervisor configuration
 # =============================================================================
 #
@@ -8,7 +8,7 @@
 # against hung workers.
 #
 # Usage:
-#   docker build -t shlink-custom:latest .
+#   docker build -t urlshortener-server:latest .
 #   docker-compose up -d
 #
 # =============================================================================
@@ -28,13 +28,13 @@ LABEL vendor="BAUER GROUP"
 LABEL maintainer="Karl Bauer <karl.bauer@bauer-group.com>"
 
 # Opencontainers Metadata
-LABEL org.opencontainers.image.title="URLShortener"
+LABEL org.opencontainers.image.title="URLShortener Server"
 LABEL org.opencontainers.image.vendor="BAUER GROUP"
 LABEL org.opencontainers.image.authors="Karl Bauer <karl.bauer@bauer-group.com>"
 LABEL org.opencontainers.image.source="https://github.com/bauer-group/CS-URLShortener"
 LABEL org.opencontainers.image.url="https://github.com/bauer-group/CS-URLShortener"
 LABEL org.opencontainers.image.documentation="https://github.com/bauer-group/CS-URLShortener#readme"
-LABEL org.opencontainers.image.description="Shlink URL Shortener - BAUER GROUP Edition"
+LABEL org.opencontainers.image.description="Shlink URL Shortener (Server) - BAUER GROUP Edition"
 LABEL org.opencontainers.image.version="0.0.0"
 
 # Extended Labels

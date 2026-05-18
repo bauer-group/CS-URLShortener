@@ -35,9 +35,9 @@ services:
   # ── Shlink Server (URL Shortener Engine) ───────────────────────────────────
   shlink-server:
     <<: *shlink-common
-    # image: ghcr.io/bauer-group/cs-urlshortener/urlshortener:${SHLINK_IMAGE_TAG:-stable}
+    # image: ghcr.io/bauer-group/cs-urlshortener/urlshortener-server:${SHLINK_IMAGE_TAG:-stable}
     build:
-      context: ./src
+      context: ./app/shlink
       dockerfile: Dockerfile
       args:
         SHLINK_VERSION: ${SHLINK_VERSION:-stable}
@@ -110,7 +110,12 @@ services:
   # ── Shlink Web Client (Admin UI) ──────────────────────────────────────────
   shlink-web:
     <<: *shlink-common
-    image: shlinkio/shlink-web-client:${SHLINK_WEB_VERSION:-stable}
+    # image: ghcr.io/bauer-group/cs-urlshortener/urlshortener-web:${SHLINK_WEB_IMAGE_TAG:-stable}
+    build:
+      context: ./app/shlink-web
+      dockerfile: Dockerfile
+      args:
+        SHLINK_WEB_VERSION: ${SHLINK_WEB_VERSION:-stable}
     container_name: ${STACK_NAME:-url-shortener}_WEB
     hostname: shlink-web
     environment:

@@ -10,7 +10,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'src/**'
+      - 'app/**'
       - 'docker-compose*.yml'
       - '.env.example'
   workflow_dispatch:
@@ -58,19 +58,19 @@ jobs:
     secrets: inherit
 
   # ============================================
-  # Docker Build & Push (shlink image)
+  # Docker Build & Push (urlshortener-server)
   # ============================================
 
-  docker-build-urlshortener-release:
-    name: 🐳 Build & Push urlshortener
+  docker-build-server-release:
+    name: 🐳 Build & Push urlshortener-server
     needs: release
     if: needs.release.outputs.release-created == 'true'
     uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
     with:
       deploy-environment: 'production'
       publish-to: 'ghcr'
-      ghcr-image-name: 'bauer-group/CS-URLShortener/urlshortener'
-      docker-image-name: 'bauergroup/cs-urlshortener'
+      ghcr-image-name: 'bauer-group/CS-URLShortener/urlshortener-server'
+      docker-image-name: 'bauergroup/cs-urlshortener-server'
 
       release-version: ${{ needs.release.outputs.version }}
       image-tags: 'stable'
@@ -79,8 +79,8 @@ jobs:
       auto-tags: true
       latest-tag: true
 
-      dockerfile-path: './src/Dockerfile'
-      docker-context: './src'
+      dockerfile-path: './app/shlink/Dockerfile'
+      docker-context: './app/shlink'
       platforms: 'linux/amd64'
 
       push: true
@@ -91,8 +91,8 @@ jobs:
       sync-dockerhub-readme: true
     secrets: inherit
 
-  docker-build-urlshortener-pr:
-    name: 🔨 Validate urlshortener Build (PR)
+  docker-build-server-pr:
+    name: 🔨 Validate urlshortener-server Build (PR)
     needs: [validate-compose]
     if: |
       github.event_name == 'pull_request' &&
@@ -100,11 +100,67 @@ jobs:
     uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
     with:
       publish-to: 'ghcr'
-      ghcr-image-name: 'bauer-group/CS-URLShortener/urlshortener'
+      ghcr-image-name: 'bauer-group/CS-URLShortener/urlshortener-server'
 
       auto-tags: true
-      dockerfile-path: './src/Dockerfile'
-      docker-context: './src'
+      dockerfile-path: './app/shlink/Dockerfile'
+      docker-context: './app/shlink'
+      platforms: 'linux/amd64'
+
+      push: false
+
+      security-scan: false
+      security-fail-on: 'CRITICAL'
+    secrets: inherit
+
+  # ============================================
+  # Docker Build & Push (urlshortener-web)
+  # ============================================
+
+  docker-build-web-release:
+    name: 🐳 Build & Push urlshortener-web
+    needs: release
+    if: needs.release.outputs.release-created == 'true'
+    uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
+    with:
+      deploy-environment: 'production'
+      publish-to: 'ghcr'
+      ghcr-image-name: 'bauer-group/CS-URLShortener/urlshortener-web'
+      docker-image-name: 'bauergroup/cs-urlshortener-web'
+
+      release-version: ${{ needs.release.outputs.version }}
+      image-tags: 'stable'
+
+      update-dockerfile-version: true
+      auto-tags: true
+      latest-tag: true
+
+      dockerfile-path: './app/shlink-web/Dockerfile'
+      docker-context: './app/shlink-web'
+      platforms: 'linux/amd64'
+
+      push: true
+
+      security-scan: false
+      security-fail-on: 'CRITICAL'
+      generate-sbom: true
+      sync-dockerhub-readme: true
+    secrets: inherit
+
+  docker-build-web-pr:
+    name: 🔨 Validate urlshortener-web Build (PR)
+    needs: [validate-compose]
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.validate-compose.result == 'success'
+    uses: bauer-group/automation-templates/.github/workflows/docker-build.yml@main
+    with:
+      publish-to: 'ghcr'
+      ghcr-image-name: 'bauer-group/CS-URLShortener/urlshortener-web'
+
+      auto-tags: true
+      dockerfile-path: './app/shlink-web/Dockerfile'
+      docker-context: './app/shlink-web'
       platforms: 'linux/amd64'
 
       push: false
