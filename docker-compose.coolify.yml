@@ -50,6 +50,11 @@ services:
   shlink-server:
     <<: *shlink-common
     image: ghcr.io/bauer-group/cs-urlshortener/urlshortener-server:${SHLINK_IMAGE_TAG:-stable}
+    # Force a registry roundtrip on every redeploy so moving tags like :stable
+    # actually refresh — Compose's default `missing` policy otherwise reuses
+    # the locally cached image indefinitely once it exists, leaving Coolify
+    # hosts pinned to whatever was current at the first pull.
+    pull_policy: always
     # build:
     #   context: ./app/shlink
     #   dockerfile: Dockerfile
@@ -125,6 +130,7 @@ services:
   shlink-web:
     <<: *shlink-common
     image: ghcr.io/bauer-group/cs-urlshortener/urlshortener-web:${SHLINK_WEB_IMAGE_TAG:-stable}
+    pull_policy: always
     # build:
     #   context: ./app/shlink-web
     #   dockerfile: Dockerfile
@@ -155,6 +161,7 @@ services:
   # ─────────────────────────────────────────────────────────────────────────────
   shlink-db:
     image: postgres:${POSTGRES_VERSION:-18}
+    pull_policy: always
     container_name: ${STACK_NAME:-url-shortener}_DATABASE
     hostname: shlink-db
     restart: unless-stopped
