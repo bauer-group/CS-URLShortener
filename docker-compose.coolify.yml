@@ -161,7 +161,6 @@ services:
   # ─────────────────────────────────────────────────────────────────────────────
   shlink-db:
     image: postgres:${POSTGRES_VERSION:-18}
-    pull_policy: always
     container_name: ${STACK_NAME:-url-shortener}_DATABASE
     hostname: shlink-db
     restart: unless-stopped
