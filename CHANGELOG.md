@@ -1,3 +1,5 @@
+## [2.1.9](https://github.com/bauer-group/CS-URLShortener/compare/v2.1.8...v2.1.9) (2026-06-23)
+
 ## [2.1.8](https://github.com/bauer-group/CS-URLShortener/compare/v2.1.7...v2.1.8) (2026-06-21)
 
 ## [2.1.7](https://github.com/bauer-group/CS-URLShortener/compare/v2.1.6...v2.1.7) (2026-06-19)
