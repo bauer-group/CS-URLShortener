@@ -1,3 +1,9 @@
+## [2.1.14](https://github.com/bauer-group/CS-URLShortener/compare/v2.1.13...v2.1.14) (2026-08-05)
+
+### 🐛 Bug Fixes
+
+* **ci:** added the missing permissions block ([019e8e9](https://github.com/bauer-group/CS-URLShortener/commit/019e8e99317a6bee00c3af4a56a66e1d3ce8d699))
+
 ## [2.1.13](https://github.com/bauer-group/CS-URLShortener/compare/v2.1.12...v2.1.13) (2026-07-17)
 
 ## [2.1.12](https://github.com/bauer-group/CS-URLShortener/compare/v2.1.11...v2.1.12) (2026-07-14)
