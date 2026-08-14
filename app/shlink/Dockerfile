@@ -35,7 +35,7 @@ LABEL org.opencontainers.image.source="https://github.com/bauer-group/CS-URLShor
 LABEL org.opencontainers.image.url="https://github.com/bauer-group/CS-URLShortener"
 LABEL org.opencontainers.image.documentation="https://github.com/bauer-group/CS-URLShortener#readme"
 LABEL org.opencontainers.image.description="Shlink URL Shortener (Server) - BAUER GROUP Edition"
-LABEL org.opencontainers.image.version="2.1.15"
+LABEL org.opencontainers.image.version="2.1.16"
 
 # Extended Labels
 LABEL org.opencontainers.image.base.name="shlinkio/shlink:${SHLINK_VERSION}"
