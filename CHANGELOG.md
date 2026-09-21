@@ -4,6 +4,14 @@ All notable changes to this project are documented here. This file is maintained
 automatically by [semantic-release](https://github.com/semantic-release/semantic-release)
 on every release to `main`.
 
+## [2.1.20](https://github.com/bauer-group/CS-URLShortener/compare/v2.1.19...v2.1.20) (2026-09-21)
+
+### 🔧 Maintenance
+
+* **deps:** update base image shlink ([186df4e](https://github.com/bauer-group/CS-URLShortener/commit/186df4e46dd363e3cfd86afa0c9baff501f3cb94))
+* update Dockerfile version to 2.1.19 ([70a0fe4](https://github.com/bauer-group/CS-URLShortener/commit/70a0fe4483f05f110784cf247b1afe359ab2c5ae))
+* update Dockerfile version to 2.1.19 ([940475d](https://github.com/bauer-group/CS-URLShortener/commit/940475d93aa58dc49bfade22a6fc2c5ab10471f4))
+
 ## [2.1.19](https://github.com/bauer-group/CS-URLShortener/compare/v2.1.18...v2.1.19) (2026-09-19)
 
 ### 🔧 Maintenance
