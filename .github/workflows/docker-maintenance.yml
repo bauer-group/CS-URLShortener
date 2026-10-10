@@ -1,10 +1,19 @@
 # =============================================================================
-# Docker Maintenance — Auto-merge Dependabot PRs (Shlink Dockerfiles)
+# Docker Maintenance — Auto-merge Dependabot PRs
 # =============================================================================
-# When Dependabot opens a PR bumping a base image inside any of our
-# Dockerfiles (app/shlink/Dockerfile or app/shlink-web/Dockerfile), this
-# workflow auto-approves and merges it (after validation passes), which
-# then triggers docker-release.yml to build and push the updated image.
+# Every Dependabot PR starts this workflow (no paths filter), so each one gets
+# a decision and an annotation instead of silently staying open. A PR is
+# merged only after docker-release.yml has run on its head commit and passed;
+# GitHub Actions updates and other .github/ changes always stay open for a
+# manual merge.
+#
+# What docker-release.yml tests on a PR:
+#   - app/shlink/Dockerfile, app/shlink-web/Dockerfile (docker): both images
+#     are built, so a base image update there is tested.
+#   - docker-compose*.yml (docker-compose): only validated (docker compose
+#     config, image references exist) - no stack is started, so an image tag
+#     update there is not tested. Dependabot opens no such PRs today: every
+#     image reference is ${VAR:-default}, which it skips.
 # =============================================================================
 
 name: 🔧 Docker Maintenance
@@ -12,9 +21,6 @@ name: 🔧 Docker Maintenance
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'app/shlink/Dockerfile'
-      - 'app/shlink-web/Dockerfile'
 
 permissions:
   contents: write
