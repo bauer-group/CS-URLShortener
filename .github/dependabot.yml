@@ -10,6 +10,14 @@
 # Image-tag updates that bump from a floating tag to a new floating tag
 # (e.g. shlinkio/shlink:4 → shlinkio/shlink:5) surface here as PRs. Pure digest
 # drift on existing tags is handled by check-base-images.yml (daily cron).
+#
+# Commit prefixes decide whether a merged update is released
+# (docker-maintenance.yml dispatches docker-release.yml after the merge):
+#   docker, docker-compose -> fix(docker): PATCH release, the images are
+#                             rebuilt (base images and the compose files
+#                             operators deploy, Coolify included, ship to
+#                             users)
+#   github-actions         -> chore(ci): no release, never auto-merged
 # =============================================================================
 
 version: 2
@@ -42,7 +50,7 @@ updates:
       - "docker"
       - "dependabot"
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "fix(docker)"
 
   # shlink server base image (shlinkio/shlink in app/shlink/Dockerfile)
   - package-ecosystem: "docker"
@@ -57,7 +65,7 @@ updates:
       - "docker"
       - "dependabot"
     commit-message:
-      prefix: "chore(docker)"
+      prefix: "fix(docker)"
 
   # shlink web client base image (shlinkio/shlink-web-client in app/shlink-web/Dockerfile)
   - package-ecosystem: "docker"
@@ -72,4 +80,4 @@ updates:
       - "docker"
       - "dependabot"
     commit-message:
-      prefix: "chore(docker)"
+      prefix: "fix(docker)"
