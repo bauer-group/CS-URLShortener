@@ -5,14 +5,14 @@
     {
       "name": "shlink",
       "image": "shlinkio/shlink",
-      "tag": "stable",
+      "dockerfile": "app/shlink/Dockerfile",
       "variable": "SHLINK_STABLE_DIGEST",
       "description": "Shlink URL shortener — base image for app/shlink/Dockerfile (urlshortener-server build)"
     },
     {
       "name": "shlink-web-client",
       "image": "shlinkio/shlink-web-client",
-      "tag": "stable",
+      "dockerfile": "app/shlink-web/Dockerfile",
       "variable": "SHLINK_WEB_STABLE_DIGEST",
       "description": "Shlink admin web client — base image for app/shlink-web/Dockerfile (urlshortener-web build)"
     },
